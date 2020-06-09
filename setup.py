@@ -4,8 +4,8 @@ with open("README.txt", "r") as fn:
     long_description = fn.read()
 
 setuptools.setup(
-    name="pysonde", # Replace with your own username
-    version="0.0.1",
+    name="PySonde",
+    version="0.1.0",
     author="Christopher Phillips of UAH, Huntsville, Alabama",
     author_email="cephillips574@gmail.com",
     description="A python package for reading and analyzing several common weather balloon sounding formats.",
