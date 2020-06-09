@@ -4,7 +4,7 @@ with open("README.txt", "r") as fn:
     long_description = fn.read()
 
 setuptools.setup(
-    name="sodoesaburningbus", # Replace with your own username
+    name="pysonde", # Replace with your own username
     version="0.0.1",
     author="Christopher Phillips of UAH, Huntsville, Alabama",
     author_email="cephillips574@gmail.com",
