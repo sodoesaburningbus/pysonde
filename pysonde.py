@@ -280,7 +280,11 @@ class PySonde:
         fn = nc.Dataset(self.fpath)
 
         #Grab the launch location and site
-        self.release_site = fn.StationName
+        try:
+            self.release_site = fn.StationName
+        except:
+            self.release_site = fn.site_id
+            
         self.release_time = datetime.strptime(fn.BalloonReleaseDateAndTime, "%Y-%m-%dT%H:%M:%S")
         if self.units: #Attach units
             self.release_lon = fn.variables["lon"][:][0]*mu.deg
