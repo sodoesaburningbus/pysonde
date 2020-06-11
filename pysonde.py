@@ -279,13 +279,17 @@ class PySonde:
         #Load the NetCDF file for reading
         fn = nc.Dataset(self.fpath)
 
-        #Grab the launch location and site
+        #Grab the launch location and time
         try:
             self.release_site = fn.StationName
         except:
             self.release_site = fn.site_id
+        
+        try:
+            self.release_time = datetime.strptime(fn.BalloonReleaseDateAndTime, "%Y-%m-%dT%H:%M:%S")
+        except:
+            self.release_time = datetime.strptime(fn.launch_status.split("\n")[3]m "%y%m%d %H%M")
             
-        self.release_time = datetime.strptime(fn.BalloonReleaseDateAndTime, "%Y-%m-%dT%H:%M:%S")
         if self.units: #Attach units
             self.release_lon = fn.variables["lon"][:][0]*mu.deg
             self.release_lat = fn.variables["lat"][:][0]*mu.deg
