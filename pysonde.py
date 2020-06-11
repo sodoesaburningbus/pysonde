@@ -288,7 +288,7 @@ class PySonde:
         try:
             self.release_time = datetime.strptime(fn.BalloonReleaseDateAndTime, "%Y-%m-%dT%H:%M:%S")
         except:
-            self.release_time = datetime.strptime(fn.launch_status.split("\n")[3]m "%y%m%d %H%M")
+            self.release_time = datetime.strptime(fn.launch_status.split("\n")[3], "%y%m%d %H%M")
             
         if self.units: #Attach units
             self.release_lon = fn.variables["lon"][:][0]*mu.deg
