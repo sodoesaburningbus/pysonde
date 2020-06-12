@@ -94,48 +94,60 @@ class PySonde:
     #Units are attached unless the user specifies otherwise
     def calculate_basic_thermo(self):
 
-        #Calculate surface-based CAPE and CIN, LCL, and Precipitable Water (PW) from sounding
-        if self.units: #If units attached
+        #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
+        try:
+        
+            #Calculate surface-based CAPE and CIN, LCL, and Precipitable Water (PW) from sounding
+            if self.units: #If units attached
 
-            #Precipitable Water
-            self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
+                #Precipitable Water
+                self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
 
-            #Lifting condensation level
-            self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0],
-                self.sounding["dewp"][0])
-            
-            #Surface-based CAPE and CIN
-            self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
-                self.sounding["dewp"][0])
-            self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"], self.sounding["temp"],
-                self.sounding["dewp"], self.parcel_path)
+                #Lifting condensation level
+                self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0],
+                    self.sounding["dewp"][0])
 
-        else: #If no units
-            #Precipitable Water
-            pw = mc.precipitable_water(numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"],
-                numpy.array(self.sounding["pres"])*self.sounding_units["pres"])
+                #Surface-based CAPE and CIN
+                self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
+                    self.sounding["dewp"][0])
+                self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"], self.sounding["temp"],
+                    self.sounding["dewp"], self.parcel_path)
 
-            #Lifting condensation level
-            lcl_pres, lcl_temp = mc.lcl(self.sounding["pres"][0]*self.sounding_units["pres"],
-                self.sounding["temp"][0]*self.sounding_units["temp"],
-                self.sounding["dewp"][0]*self.sounding_units["dewp"])
-            
-            #Surface-based CAPE and CIN
-            parcel_path = mc.parcel_profile(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
-                self.sounding["temp"][0]*self.sounding_units["temp"],
-                self.sounding["dewp"][0]*self.sounding_units["dewp"])
-            sfc_cape, sfc_cin = mc.cape_cin(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
-                numpy.array(self.sounding["temp"])*self.sounding_units["temp"],
-                numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"], parcel_path)
+            else: #If no units
+                #Precipitable Water
+                pw = mc.precipitable_water(numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"],
+                    numpy.array(self.sounding["pres"])*self.sounding_units["pres"])
 
-            #Strip units from final quantities
-            self.parcel_path = numpy.array(parcel_path, dtype="float")
-            self.pw = numpy.array(pw, dtype="float")
-            self.lcl_pres = numpy.array(lcl_pres, dtype="float")
-            self.lcl_temp = numpy.array(lcl_temp, dtype="float")
-            self.sfc_cape = numpy.array(sfc_cape, dtype="float")
-            self.sfc_cin = numpy.array(sfc_cin, dtype="float")
+                #Lifting condensation level
+                lcl_pres, lcl_temp = mc.lcl(self.sounding["pres"][0]*self.sounding_units["pres"],
+                    self.sounding["temp"][0]*self.sounding_units["temp"],
+                    self.sounding["dewp"][0]*self.sounding_units["dewp"])
 
+                #Surface-based CAPE and CIN
+                parcel_path = mc.parcel_profile(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
+                    self.sounding["temp"][0]*self.sounding_units["temp"],
+                    self.sounding["dewp"][0]*self.sounding_units["dewp"])
+                sfc_cape, sfc_cin = mc.cape_cin(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
+                    numpy.array(self.sounding["temp"])*self.sounding_units["temp"],
+                    numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"], parcel_path)
+
+                #Strip units from final quantities
+                self.parcel_path = numpy.array(parcel_path, dtype="float")
+                self.pw = numpy.array(pw, dtype="float")
+                self.lcl_pres = numpy.array(lcl_pres, dtype="float")
+                self.lcl_temp = numpy.array(lcl_temp, dtype="float")
+                self.sfc_cape = numpy.array(sfc_cape, dtype="float")
+                self.sfc_cin = numpy.array(sfc_cin, dtype="float")
+
+        #Do this when parcel path fails to converge
+        except:
+            self.parcel_path = numpy.nan
+            self.pw = numpy.nan
+            self.lcl_pres = numpy.nan
+            self.lcl_temp = numpy.nan
+            self.sfc_cape = numpy.nan
+            self.sfc_cin = numpy.nan
+                
         #Returning
         return
 
