@@ -52,12 +52,10 @@ class PySonde:
     ### Inputs:
     ###  fpath, string, file path to sounding
     ###  sformat, string, options are: "NWS", "CSWR", "EOL" see ReadMe for full breakdown
-    ###  units, optional, boolean, default=True, whether to attach units to sounding
-    ###    note, if unit flag is false, units should be metric mks, but this is not guaranteed.
     ###
     ### Outputs:
     ###  None
-    def __init__(self, fpath, sformat, units=True):
+    def __init__(self, fpath, sformat):
 
         #First attach file path, format, and units flag to object
         self.fpath = fpath
@@ -68,6 +66,12 @@ class PySonde:
         self.sounding_units = {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC,
             "uwind":mu.meter/mu.second, "vwind":mu.meter/mu.second, "lon":mu.deg, "lat":mu.deg, "alt":mu.meter}
 
+        #Initialize sounding dictionaries for both unitless and with units
+        self.sounding = {} #Sounding with units attached
+        self.sounding_uf = {} #Unit free sounding
+        for k in self.sounding_units.keys():
+            self.sounding[k] = []
+
         #Now read in the sounding based on it's format
         if (self.sformat == "NWS"): #NWS sounding
             self.read_nws()
@@ -77,6 +81,9 @@ class PySonde:
 
         elif (self.sformat == "CSWR"): #CSWR sounding
             self.read_cswr()
+            
+        elif (self.sformat == "WYO"): #University of Wyoming sounding
+            self.read_wyoming()
         
         else: #Unrecognized format
             print("Unrecognized sounding format: ()".format(self.sformat))
@@ -141,6 +148,7 @@ class PySonde:
 
         #Do this when parcel path fails to converge
         except:
+            print("WARNING: Parcel path did not converge. No LCL, CAPE, or PW stats.")
             self.parcel_path = numpy.nan
             self.pw = numpy.nan
             self.lcl_pres = numpy.nan
@@ -241,14 +249,9 @@ class PySonde:
                 #Pull metadata
                 self.release_site = dummy[0]
                 self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%Y%m%d%H%M")
-                if self.units: #Test for unit flag
-                    self.release_lon = float(dummy[5])*mu.deg
-                    self.release_lat = float(dummy[4])*mu.deg
-                    self.release_elv = float(dummy[3])*mu.meter
-                else:
-                    self.release_lon = float(dummy[5])*mu.deg
-                    self.release_lat = float(dummy[4])*mu.deg
-                    self.release_elv = float(dummy[3])*mu.meter
+                self.release_lon = float(dummy[5])*mu.deg
+                self.release_lat = float(dummy[4])*mu.deg
+                self.release_elv = float(dummy[3])*mu.meter
 
             #Now for the data rows
             else:
@@ -273,14 +276,8 @@ class PySonde:
         self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)
 
         #Now convert the other variables to arrays and attach units
-        units = [mu.second, mu.hPa, mu.degC, mu.degC, mu.meter/mu.second,
-            mu.meter/mu.second, mu.deg, mu.deg, mu.meter]
-        if self.units: #Default case, units are attached
-            for k in keys:
-                self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
-        else: #No units
-            for k in keys:
-                self.sounding[k] = numpy.array(self.sounding[k], dtype="float")
+        for k in keys:
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
         #Returning
         return
@@ -300,17 +297,11 @@ class PySonde:
         try:
             self.release_time = datetime.strptime(fn.BalloonReleaseDateAndTime, "%Y-%m-%dT%H:%M:%S")
         except:
-            self.release_time = datetime.strptime(fn.launch_status.split("\n")[3], "%y%m%d %H%M\r")
-            
-        if self.units: #Attach units
-            self.release_lon = fn.variables["lon"][:][0]*mu.deg
-            self.release_lat = fn.variables["lat"][:][0]*mu.deg
-            self.release_elv = fn.variables["alt"][:][0]*mu.meter
-        else: #no units
+            self.release_time = datetime.strptime(fn.launch_status.split("\n")[3], "%y%m%d %H%M\r") 
 
-            self.release_lon = fn.variables["lon"][:][0]
-            self.release_lat = fn.variables["lat"][:][0]
-            self.release_elv = fn.variables["alt"][:][0]
+        self.release_lon = fn.variables["lon"][:][0]*mu.deg
+        self.release_lat = fn.variables["lat"][:][0]*mu.deg
+        self.release_elv = fn.variables["alt"][:][0]*mu.meter
 
         #Create a dictionary to hold the sounding
         self.sounding = {}
@@ -319,11 +310,7 @@ class PySonde:
         skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
         fkeys = ["time", "pres", "tdry", "dp", "u_wind", "v_wind", "lon", "lat", "alt"]
         for [sk, fk] in zip(skeys, fkeys):
-            if self.units: #Attach units
-                self.sounding[sk] = numpy.array(fn.variables[fk][:])*self.sounding_units[sk]
-            
-            else: #No units
-                self.sounding[sk] = fn.variables[fk][:]
+            self.sounding[sk] = numpy.array(fn.variables[fk][:])*self.sounding_units[sk]
 
         #Close the netcdf file
         fn.close()
@@ -355,14 +342,10 @@ class PySonde:
 
                 elif ("Release Location" in line):
                     dummy = line.split()
-                    if self.units: #Test for unit flag
-                        self.release_lon = float(dummy[7].strip(","))*mu.deg
-                        self.release_lat = float(dummy[8].strip(","))*mu.deg
-                        self.release_elv = float(dummy[9].strip(","))*mu.meter
-                    else:
-                        self.release_lon = float(dummy[7].strip(","))
-                        self.release_lat = float(dummy[8].strip(","))
-                        self.release_elv = float(dummy[9].strip(","))
+                    
+                    self.release_lon = float(dummy[7].strip(","))*mu.deg
+                    self.release_lat = float(dummy[8].strip(","))*mu.deg
+                    self.release_elv = float(dummy[9].strip(","))*mu.meter
                 
                 elif ("UTC Release Time" in line):
                     dummy = line[line.find(":")+1:]
@@ -395,13 +378,58 @@ class PySonde:
         fn.close()
 
         #Once the data has been read in, convert everything to numpy arrays and attach units
-        if self.units: #Default case, units are attached
-            for k in keys:
-                self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
-        else: #No units
-            for k in keys:
-                self.sounding[k] = numpy.array(self.sounding[k], dtype="float")
+        for k in keys:
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
+        #Returning
+        return
+        
+    ### Method to read in University of Wyoming sounding
+    def read_wyoming(self):
+        
+        #Open the sounding and read line-by-line
+        fn = open(self.fpath)
+        wdir = [] #Lists to hold temporary wind variables
+        wspd = []
+        for line in fn:
+        
+            #Test if line is data
+            try:
+                dummy = float(line[0])
+            except:
+            
+                if ("Station Identifier" in line):
+                    self.release_site = line.split(":")[1].strip()
+                elif ("Station latitude" in line):
+                    self.release_lat = float(line.split(":")[1].strip())
+                elif ("Station longitude" in line):
+                    self.release_lon = float(line.split(":")[1].strip())
+                elif ("Station elevation" in line):
+                    self.release_elv = float(line.split(":")[1].strip())
+                elif ("Observation time" in line):
+                    self.release_time = datetime.strptime(line.split(":")[1].strip(), "%y%m%d/%H%M")
+                
+                continue
+            
+            #Read the data
+            dummy = line.split(()
+            self.sounding["time"].append(numpy.nan)
+            self.sounding["pres"].append(dummy[0])
+            self.sounding["temp"].append(dummy[2])
+            self.sounding["dewp"].append(dummy[3])
+            wdir.append(dummy[6])
+            wspd.append(dummy[7])
+            self.sounding["lon"].append(numpy.nan)
+            self.sounding["lat"].append(numpy.nan)
+            self.sounding["alt"].append(dummy[1])
+            
+        #Close the file
+        fn.close()
+        
+        #Convert lists to arrays, attach units, and calculat wind components
+        for k in self.sounding.keys():
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]            
+    
         #Returning
         return
 
