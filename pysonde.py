@@ -7,8 +7,8 @@
 ### By default, the object supports unit aware computing, but the option exists to strip
 ### units from the sounding.
 ###
-### The object only supports one sounding per file. If more are present, only the first will be read in
-### if the reader doesn't break.
+### The object only supports one sounding per file. If more are present, only the first
+### will be read in, if the reader doesn't break.
 ###
 ### Written by Christopher Phillips
 ### University of Alabama in Huntsville, June 2020
@@ -17,9 +17,9 @@
 ###  NWS high density soundings
 ###  Center for Severe Weather Research L2 soundings
 ###  National Center for Atmospheric Research - Earth Observing Laboratory soundings
+###  University of Wyoming sounding archive
 ###
 ### Future updates plan to include support for the following sounding sources
-###   University of Wyoming
 ###   WRF SCM input soundings
 ###
 ### Future updates also plan to add the following features
@@ -34,6 +34,7 @@
 ### Numpy
 
 ### Importing required modules
+import atmos.thermo as at
 from datetime import datetime
 from datetime import timedelta
 import matplotlib.pyplot as pp
@@ -42,6 +43,7 @@ import metpy.calc as mc
 from metpy.plots import SkewT
 import netCDF4 as nc
 import numpy
+from siphon.simplewebservice.wyoming import WyomingUpperAir
 
 ############################################################
 #---------------------     PYSONDE     ---------------------#
@@ -50,17 +52,17 @@ class PySonde:
 
     ### Constructor Method
     ### Inputs:
-    ###  fpath, string, file path to sounding
-    ###  sformat, string, options are: "NWS", "CSWR", "EOL" see ReadMe for full breakdown
+    ###  fpath, string, file path to sounding. In the case of the web service, this is the station identifier
+    ###  sformat, string, options are: "NWS", "CSWR", "EOL", "WEB" see ReadMe for full breakdown
+    ###  date, optional, datetime object for Siphon web service sounding
     ###
     ### Outputs:
     ###  None
-    def __init__(self, fpath, sformat):
+    def __init__(self, fpath, sformat, date=None):
 
         #First attach file path, format, and units flag to object
         self.fpath = fpath
         self.sformat = sformat.upper()
-        self.units = units
 
         #Attach correct units to sounding object as a dictionary
         self.sounding_units = {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC,
@@ -84,12 +86,15 @@ class PySonde:
             
         elif (self.sformat == "WYO"): #University of Wyoming sounding
             self.read_wyoming()
+            
+        elif (self.sformat == "WEB"): #Pull sounding from internet
+            self.read_web(date)
         
         else: #Unrecognized format
             print("Unrecognized sounding format: ()".format(self.sformat))
             raise ValueError
 
-        #Calculate the basic thermo propertie, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
+        #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
 
         #Returning
@@ -104,47 +109,18 @@ class PySonde:
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
         try:
         
-            #Calculate surface-based CAPE and CIN, LCL, and Precipitable Water (PW) from sounding
-            if self.units: #If units attached
+            #Precipitable Water
+            self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
 
-                #Precipitable Water
-                self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
+            #Lifting condensation level
+            self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0],
+                self.sounding["dewp"][0])
 
-                #Lifting condensation level
-                self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0],
-                    self.sounding["dewp"][0])
-
-                #Surface-based CAPE and CIN
-                self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
-                    self.sounding["dewp"][0])
-                self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"], self.sounding["temp"],
-                    self.sounding["dewp"], self.parcel_path)
-
-            else: #If no units
-                #Precipitable Water
-                pw = mc.precipitable_water(numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"],
-                    numpy.array(self.sounding["pres"])*self.sounding_units["pres"])
-
-                #Lifting condensation level
-                lcl_pres, lcl_temp = mc.lcl(self.sounding["pres"][0]*self.sounding_units["pres"],
-                    self.sounding["temp"][0]*self.sounding_units["temp"],
-                    self.sounding["dewp"][0]*self.sounding_units["dewp"])
-
-                #Surface-based CAPE and CIN
-                parcel_path = mc.parcel_profile(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
-                    self.sounding["temp"][0]*self.sounding_units["temp"],
-                    self.sounding["dewp"][0]*self.sounding_units["dewp"])
-                sfc_cape, sfc_cin = mc.cape_cin(numpy.array(self.sounding["pres"])*self.sounding_units["pres"],
-                    numpy.array(self.sounding["temp"])*self.sounding_units["temp"],
-                    numpy.array(self.sounding["dewp"])*self.sounding_units["dewp"], parcel_path)
-
-                #Strip units from final quantities
-                self.parcel_path = numpy.array(parcel_path, dtype="float")
-                self.pw = numpy.array(pw, dtype="float")
-                self.lcl_pres = numpy.array(lcl_pres, dtype="float")
-                self.lcl_temp = numpy.array(lcl_temp, dtype="float")
-                self.sfc_cape = numpy.array(sfc_cape, dtype="float")
-                self.sfc_cin = numpy.array(sfc_cin, dtype="float")
+            #Surface-based CAPE and CIN
+            self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
+                self.sounding["dewp"][0])
+            self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"], self.sounding["temp"],
+                self.sounding["dewp"], self.parcel_path)
 
         #Do this when parcel path fails to converge
         except:
@@ -159,7 +135,34 @@ class PySonde:
         #Returning
         return
 
-    #####-------------------METHODS TO PLOT SOUNDING-------------------#####
+    #####-------------------METHODS TO PLOT OR OUTPUT SOUNDING-------------------#####
+
+    ### Method to plot a basic sounding
+    ### Includes only temperature, dewpoint, and the parcel path
+    ### Outputs:
+    ###  fig, the pyplot figure object
+    ###  skewt, the MetPy SkewT axis object
+    def basic_skewt(self):
+
+        #Create the empty SkewT
+        fig, skewt = self.empty_skewt()
+
+        #Plot the sounding
+        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="red")
+        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="green")
+        try:
+            skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
+        except:
+            pass
+        skewt.plot_barbs(self.sounding["pres"], self.sounding["uwind"], self.sounding["vwind"])
+
+        #Add the Release time and location to plot
+        skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
+            self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
+            fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
+
+        #Returning
+        return fig, skewt
 
     ### Method to create an empty SkewT diagram
     ### Outputs:
@@ -187,29 +190,41 @@ class PySonde:
         #Returning
         return fig, skewt
 
-    ### Method to plot a basic sounding
-    ### Includes only temperature, dewpoint, and the parcel path
-    ### Outputs:
-    ###  fig, the pyplot figure object
-    ###  skewt, the MetPy SkewT axis object
-    def basic_skewt(self):
-
-        #Create the empty SkewT
-        fig, skewt = self.empty_skewt()
-
-        #Plot the sounding
-        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="red")
-        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="green")
-        skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
-        skewt.plot_barbs(self.sounding["pres"], self.sounding["uwind"], self.sounding["vwind"])
-
-        #Add the Release time and location to plot
-        skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
-            self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
-            fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
-
+    ### Method to output WRF SCM input sounding
+    ### Inputs:
+    ###  spath, string, location to save file to
+    def write_wrfscm(self, spath):
+    
+        #First strip all units from sounding
+        unitless = self.strip_units()
+        
+        #Do necessary unit conversions
+        #heights = unitless["alt"]-unitless["release_elv"] #AMSL -> AGL
+        heights = unitless["alt"]
+        temp = unitless["temp"]+273.15 #C -> K
+        pres = unitless["pres"]*100.0 #hPa -> Pa
+        
+        #Calculate necessary surface variables
+        #First compute 10m winds from the sounding using linear interpolation
+        ind2 = (numpy.arange(heights.size, dtype="int")[(heights-10)>0])[0]
+        ind1 = ind2-1
+        weight = (10.0-heights[ind1])/(heights[ind2]-heights[ind1])
+        u10 = unitless["uwind"][ind1]*(1-weight)+unitless["uwind"][ind2]*weight
+        v10 = unitless["vwind"][ind1]*(1-weight)+unitless["vwind"][ind2]*weight
+        
+        #Calculate potential temperature and mixing ratio at each level of the sounding
+        theta = at.pot_temp(pres, temp)
+        qvapor = at.etow(pres, at.sat_vaporpres(unitless["dewp"]+273.15))
+        
+        #Write everything to the output file
+        fn = open(spath, "w")
+        fn.write("{} {} {} {} {} {}".format(unitless["release_elv"], u10, v10, temp[0], qvapor[0], pres[0]))
+        for i, h in enumerate(heights[1:]):
+            fn.write("\n{} {} {} {} {}".format(h, unitless["uwind"][i], unitless["vwind"][i], theta[i], qvapor[i]))
+        fn.close()
+        
         #Returning
-        return fig, skewt
+        return
 
     #####---------------METHODS TO READ SOUNDING FORMATS---------------#####
     
@@ -279,6 +294,10 @@ class PySonde:
         for k in keys:
             self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
         #Returning
         return
 
@@ -315,6 +334,10 @@ class PySonde:
         #Close the netcdf file
         fn.close()
 
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
         #Returning
         return
 
@@ -334,8 +357,7 @@ class PySonde:
         fn = open(self.fpath)
         for line in fn:
 
-            #First check if still inside the header
-            #to pull metadata
+            #First check if w
             if header:
                 if ("Release Site" in line):
                     self.release_site = line.split()[4]
@@ -381,9 +403,92 @@ class PySonde:
         for k in keys:
             self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
         #Returning
         return
+    
+    ### Method to pull Univ. of Wyoming Sounding from internet with Siphon
+    ### Input, date for which to pull sounding
+    def read_web(self, date):
+    
+        #Pull down the sounding
+        sounding = WyomingUpperAir.request_data(date, self.fpath)
         
+        #Convert sounding to proper data format and attach to PySonde object
+        self.release_time = sounding["time"].values[0]
+        self.release_site = sounding["station"].values[0]
+        self.release_lat = sounding["latitude"].values[0]*mu(sounding.units["latitude"]).to(mu.deg)
+        self.release_lon = sounding["longitude"].values[0]*mu(sounding.units["longitude"]).to(mu.deg)
+        self.release_elv = sounding["elevation"].values[0]*mu(sounding.units["elevation"]).to(mu.meter)
+        
+        skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
+        wkeys = ["time", "pressure", "temperature", "dewpoint", "u_wind", "v_wind",
+            "longitude", "latitude", "height"]
+        for sk, wk in zip(skeys, wkeys):
+            if (sk == "time"):
+                self.sounding[sk] = numpy.nan
+            else:
+                self.sounding[sk] = sounding[wk].values*mu(sounding.units[wk]).to(self.sounding_units[sk])
+        
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+        
+        #Returning
+        return
+    
+    ### Method to read WRF SCM input sounding
+    def read_wrfscm(self):
+    
+        #Open the sounding and read line by line
+        fn = open(self)
+        first = True #Flag for first line
+        theta = []   #List to hold potential temperature (K)
+        qvapor = []  #List to hold mixing ratio (kg/kg)
+        for line in fn:
+            
+            #Split the line into columns
+            dummy = line.split()
+            
+            #Handle the first line
+            if first:
+                first = False
+                self.release_elv = float(dummy[0])
+                pres1 = dummy[-1]
+                continue
+                
+            #Read in the data
+            self.sounding["alt"].append(dummy[0])
+            self.sounding["uwind"].append(dummy[1])
+            self.sounding["vwind"].append(dummy[2])
+            theta.append(dummy[3])
+            qvapor.append(dummy[4])
+                
+        #Close the file
+        fn.close()
+        
+        #Convert data to arrays
+        self.sounding["alt"] = numpy.array(self.sounding["alt"])+self.release_elv
+        self.sounding["uwind"] = numpy.array(self.sounding["uwind"])
+        self.sounding["vwind"] = numpy.array(self.sounding["vwind"])
+        theta = numpy.array(theta)
+        qvapor = numpy.array(qvapor)
+                
+        #Calculate pressure levels that correspond to sounding heights
+        #Use the method present in module_initialize_scm_xy in WRF/dyn_em
+        pres = []
+        dz = self.sounding["alt"][1:]-self.sounding["alt"][:-1]
+        pres.append(pres1-0.5*dz[0]*(rho[0]+rho1)*at.G*
+        for i in range(1, theta.size):
+            pres.append(
+        
+        
+        #Returning
+        return
+    
     ### Method to read in University of Wyoming sounding
     def read_wyoming(self):
         
@@ -391,49 +496,80 @@ class PySonde:
         fn = open(self.fpath)
         wdir = [] #Lists to hold temporary wind variables
         wspd = []
+        header = True #Flag for the header rows
         for line in fn:
+
+            #Split the data row into columns
+            dummy = line.split()
         
-            #Test if line is data
-            try:
-                dummy = float(line[0])
-            except:
+            #Testing if within data sections
+            if ((len(dummy) == 11) and ("." in dummy[0])):
             
-                if ("Station Identifier" in line):
+                #Read the data
+                self.sounding["time"].append(numpy.nan)
+                self.sounding["pres"].append(dummy[0])
+                self.sounding["temp"].append(dummy[2])
+                self.sounding["dewp"].append(dummy[3])
+                wdir.append(dummy[6])
+                wspd.append(dummy[7])
+                self.sounding["lon"].append(numpy.nan)
+                self.sounding["lat"].append(numpy.nan)
+                self.sounding["alt"].append(dummy[1])
+                
+            else: #Go into metadata          
+                if ("Station identifier" in line):
                     self.release_site = line.split(":")[1].strip()
                 elif ("Station latitude" in line):
-                    self.release_lat = float(line.split(":")[1].strip())
+                    self.release_lat = float(line.split(":")[1].strip())*mu.deg
                 elif ("Station longitude" in line):
-                    self.release_lon = float(line.split(":")[1].strip())
+                    self.release_lon = float(line.split(":")[1].strip())*mu.deg
                 elif ("Station elevation" in line):
                     self.release_elv = float(line.split(":")[1].strip())
                 elif ("Observation time" in line):
                     self.release_time = datetime.strptime(line.split(":")[1].strip(), "%y%m%d/%H%M")
                 
                 continue
-            
-            #Read the data
-            dummy = line.split(()
-            self.sounding["time"].append(numpy.nan)
-            self.sounding["pres"].append(dummy[0])
-            self.sounding["temp"].append(dummy[2])
-            self.sounding["dewp"].append(dummy[3])
-            wdir.append(dummy[6])
-            wspd.append(dummy[7])
-            self.sounding["lon"].append(numpy.nan)
-            self.sounding["lat"].append(numpy.nan)
-            self.sounding["alt"].append(dummy[1])
-            
+                        
         #Close the file
         fn.close()
-        
+                
         #Convert lists to arrays, attach units, and calculat wind components
         for k in self.sounding.keys():
             self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]            
+        
+        #Calculate wind components
+        wspd = numpy.array(wspd, dtype="float")
+        wdir = numpy.array(wdir, dtype="float")
+        self.sounding["uwind"] = (numpy.array(wspd*numpy.cos((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["uwind"])
+        self.sounding["vwind"] = (numpy.array(wspd*numpy.sin((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["vwind"])
+    
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
     
         #Returning
         return
 
-
+    #####---------------OTHER METHODS---------------#####
+    
+    ###Method to strip sounding of units
+    ###Output
+    ### unitless, dictionary containing sounding without units.
+    ###  keys inlcude time, pres, temp, dewp, uwind, vwind, lon, lat, alt,
+    ###  release_site, release_lat, release_lon, release_elv, release_time
+    def strip_units(self):
+    
+        #Create dictionary for unitless sounding, starting with metadata
+        unitless = {"release_site":self.release_site, "release_lat":numpy.array(self.release_lat),
+            "release_lon":numpy.array(self.release_lon), "release_elv":numpy.array(self.release_elv),
+            "release_time":self.release_time}
+            
+        #Now handle the other arrays
+        for k in self.sounding.keys():
+            unitless[k] = numpy.array(self.sounding[k])
+    
+        #Return unitless sounding
+        return unitless
 
 
 

@@ -8,10 +8,10 @@ from pysonde.pysonde import PySonde
 import matplotlib.pyplot as pp
 
 #Location of test sounding
-sounding_path = "./example_sounding_cswr.txt"
+sounding_path = "example_soundings/wyoming_sounding.txt"
 
 #Create sounding object
-sonde = PySonde(sounding_path, "NWS")
+sonde = PySonde(sounding_path, "wyo")
 
 #Create the figure and SkewT object
 fig, skewt = sonde.basic_skewt()
