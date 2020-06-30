@@ -90,6 +90,9 @@ class PySonde:
         elif (self.sformat == "WEB"): #Pull sounding from internet
             self.read_web(date)
         
+        elif (self.sformat == "WRF"): #WRF SCM input sounding
+            self.read_wrfscm()
+        
         else: #Unrecognized format
             print("Unrecognized sounding format: ()".format(self.sformat))
             raise ValueError
@@ -199,7 +202,6 @@ class PySonde:
         unitless = self.strip_units()
         
         #Do necessary unit conversions
-        #heights = unitless["alt"]-unitless["release_elv"] #AMSL -> AGL
         heights = unitless["alt"]
         temp = unitless["temp"]+273.15 #C -> K
         pres = unitless["pres"]*100.0 #hPa -> Pa
@@ -218,7 +220,7 @@ class PySonde:
         
         #Write everything to the output file
         fn = open(spath, "w")
-        fn.write("{} {} {} {} {} {}".format(unitless["release_elv"], u10, v10, temp[0], qvapor[0], pres[0]))
+        fn.write("{} {} {} {} {} {}".format(unitless["release_elv"], u10, v10, theta[0], qvapor[0], pres[0]))
         for i, h in enumerate(heights[1:]):
             fn.write("\n{} {} {} {} {}".format(h, unitless["uwind"][i], unitless["vwind"][i], theta[i], qvapor[i]))
         fn.close()
@@ -418,7 +420,7 @@ class PySonde:
         sounding = WyomingUpperAir.request_data(date, self.fpath)
         
         #Convert sounding to proper data format and attach to PySonde object
-        self.release_time = sounding["time"].values[0]
+        self.release_time = datetime.utcfromtimestamp(sounding["time"].values[0].tolist()/1e9)
         self.release_site = sounding["station"].values[0]
         self.release_lat = sounding["latitude"].values[0]*mu(sounding.units["latitude"]).to(mu.deg)
         self.release_lon = sounding["longitude"].values[0]*mu(sounding.units["longitude"]).to(mu.deg)
@@ -444,7 +446,7 @@ class PySonde:
     def read_wrfscm(self):
     
         #Open the sounding and read line by line
-        fn = open(self)
+        fn = open(self.fpath)
         first = True #Flag for first line
         theta = []   #List to hold potential temperature (K)
         qvapor = []  #List to hold mixing ratio (kg/kg)
@@ -457,7 +459,9 @@ class PySonde:
             if first:
                 first = False
                 self.release_elv = float(dummy[0])
-                pres1 = dummy[-1]
+                theta_sfc = float(dummy[3])
+                qvapor_sfc = float(dummy[4])
+                pres_sfc = float(dummy[5])
                 continue
                 
             #Read in the data
@@ -471,20 +475,64 @@ class PySonde:
         fn.close()
         
         #Convert data to arrays
-        self.sounding["alt"] = numpy.array(self.sounding["alt"])+self.release_elv
-        self.sounding["uwind"] = numpy.array(self.sounding["uwind"])
-        self.sounding["vwind"] = numpy.array(self.sounding["vwind"])
-        theta = numpy.array(theta)
-        qvapor = numpy.array(qvapor)
-                
+        self.sounding["alt"] = numpy.array(self.sounding["alt"], dtype="float")
+        self.sounding["uwind"] = numpy.array(self.sounding["uwind"], dtype="float")*self.sounding_units["uwind"]
+        self.sounding["vwind"] = numpy.array(self.sounding["vwind"], dtype="float")*self.sounding_units["vwind"]
+        theta = numpy.array(theta, dtype="float")
+        qvapor = numpy.array(qvapor, dtype="float")
+        
+        #Calculate surface density
+        tv = at.virt_temp(theta_sfc*(pres_sfc/100000.0)**(at.RD/at.CP), qvapor_sfc)
+        rho_sfc = pres_sfc/(at.RD*tv)
+        
         #Calculate pressure levels that correspond to sounding heights
         #Use the method present in module_initialize_scm_xy in WRF/dyn_em
-        pres = []
-        dz = self.sounding["alt"][1:]-self.sounding["alt"][:-1]
-        pres.append(pres1-0.5*dz[0]*(rho[0]+rho1)*at.G*
-        for i in range(1, theta.size):
-            pres.append(
+        #Create arrays to hold values
+        rho = numpy.zeros(theta.shape)
+        pres = numpy.zeros(theta.shape)
         
+        #Setup some supporting values
+        rvord = at.RV/at.RD
+        qvf = 1 + rvord*qvapor[0]
+        qvf1 = 1 + qvapor[0]
+        dz = [self.sounding["alt"][0]-self.release_elv]+list(self.sounding["alt"][1:]-self.sounding["alt"][:-1])
+        
+        #Iteratively solve for pressure and density
+        rho[0] = rho_sfc
+        for i in range(10):
+            pres[0] = pres_sfc-0.5*dz[0]*(rho_sfc+rho[0])*at.G*qvf1
+            tv = at.virt_temp(theta[0]*(pres[0]/100000.0)**(at.RD/at.CP), qvapor[0])
+            rho[0] = pres[0]/(at.RD*tv)
+
+        for i in range(1, theta.size):
+            rho[i] = rho[i-1]
+            qvf1 = 0.5*(2.0+(qvapor[i]+qvapor[i-1]))
+            qvf = 1+rvord*qvapor[i]
+            
+            for j in range(10):
+                pres[i] = pres[i-1]-0.5*dz[i]*(rho[i]+rho[i-1])*at.G*qvf1
+                tv = at.virt_temp(theta[i]*(pres[i]/100000.0)**(at.RD/at.CP), qvapor[i])
+                rho[i] = pres[i]/(at.RD*tv)
+        
+        #Now calculate temperature from the pressure levels
+        temp = at.poisson(100000.0, pres, theta)
+        
+        #Fill rest of sounding
+        skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
+        self.sounding["time"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["time"]
+        self.sounding["alt"] = self.sounding["alt"]*self.sounding_units["alt"]
+        self.sounding["pres"] = pres/100.0*self.sounding_units["pres"] #Pa -> hPa
+        self.sounding["temp"] = (temp-273.15)*self.sounding_units["temp"] #K -> 'C
+        self.sounding["dewp"] = (at.dewpoint(at.wtoe(pres, qvapor))-273.15)*self.sounding_units["dewp"]
+        self.sounding["lon"] = numpy.nan*self.sounding_units["lon"]
+        self.sounding["lat"] = numpy.nan*self.sounding_units["lat"]
+        
+        #Attach meta data
+        self.release_time = datetime(2000, 1, 1)
+        self.release_site = "WRF SCM"
+        self.release_lat = self.sounding["lat"]
+        self.release_lon = self.sounding["lon"]
+        self.release_elv = self.release_elv*self.sounding_units["alt"]
         
         #Returning
         return
@@ -524,7 +572,7 @@ class PySonde:
                 elif ("Station longitude" in line):
                     self.release_lon = float(line.split(":")[1].strip())*mu.deg
                 elif ("Station elevation" in line):
-                    self.release_elv = float(line.split(":")[1].strip())
+                    self.release_elv = float(line.split(":")[1].strip())*self.sounding_units["alt"]
                 elif ("Observation time" in line):
                     self.release_time = datetime.strptime(line.split(":")[1].strip(), "%y%m%d/%H%M")
                 
