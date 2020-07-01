@@ -16,6 +16,7 @@ print("Wyoming CAPE: {:.03f}\n".format(sonde.sfc_cape))
 
 #Test the NWS sounding
 sonde = PySonde("example_soundings/nws_sounding.txt", "nws")
+sonde.write_wrfscm("example_soundings/wrfscm_sounding.txt")
 print("Lines in NWS sounding: {}".format(sonde.sounding["temp"].size))
 print("NWS CAPE: {:.03f}\n".format(sonde.sfc_cape))
 

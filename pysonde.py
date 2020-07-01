@@ -34,6 +34,7 @@
 ### Numpy
 
 ### Importing required modules
+import atmos.math as am
 import atmos.thermo as at
 from datetime import datetime
 from datetime import timedelta
@@ -218,11 +219,31 @@ class PySonde:
         theta = at.pot_temp(pres, temp)
         qvapor = at.etow(pres, at.sat_vaporpres(unitless["dewp"]+273.15))
         
+        #Check that sounding isn't longer than what WRF allows (3000 lines max)
+        if (pres.size > 3000): #Downsample to a reasonable number
+            #Determine pressure levels to keep
+            pmid = numpy.linspace(pres[1], pres[-2], 2000) #Only use 2000 levels, because do we really need 3000?
+            bind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)>0][-1] for pm in pmid)))
+            tind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)<=0][0] for pm in pmid)))
+            new_pres = am.layer_interp(pres[bind], pres[tind], pmid, pres[bind], pres[tind])
+            new_theta = am.layer_interp(pres[bind], pres[tind], pmid, theta[bind], theta[tind])
+            new_uwind = am.layer_interp(pres[bind], pres[tind], pmid, unitless["uwind"][bind], unitless["uwind"][tind])
+            new_vwind = am.layer_interp(pres[bind], pres[tind], pmid, unitless["vwind"][bind], unitless["vwind"][tind])
+            new_qvapor = am.layer_interp(pres[bind], pres[tind], pmid, qvapor[bind], qvapor[tind])
+            new_height = am.layer_interp(pres[bind], pres[tind], pmid, heights[bind], heights[tind])
+        else:
+            new_pres = pres
+            new_theta = theta
+            new_uwind = unitless["uwind"]
+            new_vwind = unitless["vwind"]
+            new_qvapor = qvapor
+            new_height = heights
+        
         #Write everything to the output file
         fn = open(spath, "w")
         fn.write("{} {} {} {} {} {}".format(unitless["release_elv"], u10, v10, theta[0], qvapor[0], pres[0]))
-        for i, h in enumerate(heights[1:]):
-            fn.write("\n{} {} {} {} {}".format(h, unitless["uwind"][i], unitless["vwind"][i], theta[i], qvapor[i]))
+        for i, h in enumerate(new_height[1:]):
+            fn.write("\n{} {} {} {} {}".format(h, new_uwind[i], new_vwind[i], new_theta[i], new_qvapor[i]))
         fn.close()
         
         #Returning
