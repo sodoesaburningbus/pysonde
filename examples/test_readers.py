@@ -29,4 +29,4 @@ print("WEB CAPE: {:.03f}\n".format(sonde.sfc_cape))
 sonde = PySonde("example_soundings/wrfscm_sounding.txt", "wrf")
 print("Lines in WRF sounding: {}".format(sonde.sounding["temp"].size))
 print("WRF CAPE: {:.03f} (should be similar to NWS)".format(sonde.sfc_cape))
-
+pp.show()

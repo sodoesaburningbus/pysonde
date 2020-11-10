@@ -1,5 +1,5 @@
 ### This module contains the PySonde class
-### A PySonde class provides utilities for interfacing with several
+### A PySonde object provides utilities for interfacing with several
 ### common sounding formats. It also provideas utilities for common
 ### applications such as plotting and CAPE calculations.
 ### Further, once a sounding is loaded, it can be written out for
@@ -14,17 +14,15 @@
 ### University of Alabama in Huntsville, June 2020
 ###
 ### Currently supports:
-###  NWS high density soundings
-###  Center for Severe Weather Research L2 soundings
-###  National Center for Atmospheric Research - Earth Observing Laboratory soundings
-###  University of Wyoming sounding archive
-###
-### Future updates plan to include support for the following sounding sources
-###   WRF SCM input soundings
+###  NWS - NWS high density soundings
+###  CSWR - Center for Severe Weather Research L2 soundings
+###  EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
+###  WEB - University of Wyoming sounding online archive (these are pulled from online)
+###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
+###  WYO - University of Wyoming sounding file
 ###
 ### Future updates also plan to add the following features
 ###   Options to calculate mixed layer and most unstable CAPE
-###   Siphon compatibility to automatically download soundings from the web
 ###
 ### Module requirements
 ### Python 3+
@@ -69,6 +67,9 @@ class PySonde:
         self.sounding_units = {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC,
             "uwind":mu.meter/mu.second, "vwind":mu.meter/mu.second, "lon":mu.deg, "lat":mu.deg, "alt":mu.meter}
 
+        #Attach MetPy unit object so users have access
+        self.units = mu
+
         #Initialize sounding dictionaries for both unitless and with units
         self.sounding = {} #Sounding with units attached
         self.sounding_uf = {} #Unit free sounding
@@ -100,6 +101,9 @@ class PySonde:
 
         #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
+        
+        #Calculate planetary boundary layer height
+        self.calculate_pblh()
 
         #Returning
         return
@@ -107,7 +111,6 @@ class PySonde:
     #####-----------METHODS TO CALCULATE SOUNDING PROPERTIES-----------#####
 
     #Method to calculate basic thermodynamic properties of the sounding.
-    #Units are attached unless the user specifies otherwise
     def calculate_basic_thermo(self):
 
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
@@ -139,14 +142,109 @@ class PySonde:
         #Returning
         return
 
+    #Method to calculate planetary boundary layer height (PBLH) from the sounding
+    #The algorithm takes the surface parcel and finds the first height where that parcel
+    #has negative buoyancy. If that location is the surface, we move up one level and try again.
+    #If the PBLH cannot be calculated, it is set to -1
+    def calculate_pblh(self):
+    
+        try:
+            #Strip units from sounding for use with atmos package
+            sounding = self.strip_units()
+            
+            #Calculate sounding potential temeprature and height AGL
+            height = (sounding["alt"]-self.release_elv/self.sounding_units["alt"])
+            theta = at.pot_temp(sounding["pres"]*100.0, sounding["temp"]+273.15)
+                    
+            #Locate first location where surface parcel temp is less than environment
+            #But still above the surface
+            ind_pbl = 0
+            ind = 0
+            while (ind_pbl < 2):
+                ind_pbl = numpy.where(theta[ind] < theta)[0][0]
+                ind += 1
+            
+            pblh = height[ind_pbl]*self.sounding_units["alt"]
+            pblh_pres = sounding["pres"][ind_pbl]*self.sounding_units["pres"]
+            
+            ### Old method using refractive index gradient
+            ### This tended to get hung up on remnant layers
+            #Calculate refracitive index
+            #refr = (77.6*(sounding["pres"]*100.0)/(sounding["temp"]+273.15)-
+            #                5.6*(at.sat_vaporpres(sounding["dewp"]+273.15))/(sounding["temp"]+273.15)+
+            #                3.75e5*at.sat_vaporpres(sounding["dewp"]+273.15)/(sounding["temp"]+273.15)**2)
+            #
+            #Calculate the gradient of refractivity
+            #grad_refr = numpy.gradient(refr, sounding["alt"])
+            
+            #Locate the height of maximum grad_theta and call that the PBLH
+            #(and re-attach proper units)
+            #height = (sounding["alt"]-self.release_elv/self.sounding_units["alt"])
+            #grad_refr = grad_refr[(height<5000)&(height>50)]
+            #pres = (sounding["pres"])[(height<5000)&(height>50)]
+            #height = height[(height<5000)&(height>50)]
+            #pblh = height[numpy.argmin(grad_refr)]*self.sounding_units["alt"]
+            #pblh_pres = pres[numpy.argmin(grad_refr)]*self.sounding_units["pres"]"""
+            
+            #Store PBLH as attribute of sounding
+            self.pblh = pblh
+            self.pblh_pres = pblh_pres
+           
+        except:
+            self.pblh = -1
+            self.pblh_pres = -1
+    
+        #Returning
+        return
+        
+    #Method to calculate thickness between two
+    #atmospheric levels
+    #Inputs:
+    # layer1, float (with units), pressure of lower level
+    # layer2, float (with units), pressure of upper level
+    #Outputs:
+    # thickness, float (with units), thickness between levels
+    def calculate_layer_thickness(self, layer1, layer2):
+    
+        #First convert units to be consistent with the sounding
+        layer1 = layer1.to(self.sounding_units["pres"])
+        layer2 = layer2.to(self.sounding_units["pres"])
+        
+        #Locate level in sounding closest to each level
+        ind1 = numpy.argmin((self.sounding["pres"]-layer1)**2)
+        ind2 = numpy.argmin((self.sounding["pres"]-layer2)**2)
+        
+        #Bracket the desired levels in the sounding
+        if (self.sounding["pres"][ind1] > layer1):
+            indb1 = ind1
+            indt1 = ind1+1
+        else:
+            indb1 = ind1-1
+            indt1 = ind1
+        if (self.sounding["pres"][ind2] > layer2):
+            indb2 = ind2
+            indt2 = ind2+1
+        else:
+            indb2 = ind2-1
+            indt2 = ind2
+            
+        #Calculate the layer thickness and return
+        z1 = am.layer_interp(self.sounding["pres"][indb1], self.sounding["pres"][indt1], layer1,
+            self.sounding["alt"][indb1], self.sounding["alt"][indt1])
+        z2 = am.layer_interp(self.sounding["pres"][indb2], self.sounding["pres"][indt2], layer2,
+            self.sounding["alt"][indb2], self.sounding["alt"][indt2])
+        return z2-z1
+
     #####-------------------METHODS TO PLOT OR OUTPUT SOUNDING-------------------#####
 
     ### Method to plot a basic sounding
     ### Includes only temperature, dewpoint, and the parcel path
+    ### Inputs:
+    ###  nbarbs, optional, integer, spacing between wind barbs
     ### Outputs:
     ###  fig, the pyplot figure object
     ###  skewt, the MetPy SkewT axis object
-    def basic_skewt(self):
+    def basic_skewt(self, nbarbs=None):
 
         #Create the empty SkewT
         fig, skewt = self.empty_skewt()
@@ -158,7 +256,11 @@ class PySonde:
             skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
         except:
             pass
-        skewt.plot_barbs(self.sounding["pres"], self.sounding["uwind"], self.sounding["vwind"])
+            
+        if (nbarbs == None):
+            skewt.plot_barbs(self.sounding["pres"], self.sounding["uwind"], self.sounding["vwind"])
+        else:
+            skewt.plot_barbs(self.sounding["pres"][::nbarbs], self.sounding["uwind"][::nbarbs], self.sounding["vwind"][::nbarbs])
 
         #Add the Release time and location to plot
         skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
@@ -219,10 +321,10 @@ class PySonde:
         theta = at.pot_temp(pres, temp)
         qvapor = at.etow(pres, at.sat_vaporpres(unitless["dewp"]+273.15))
         
-        #Check that sounding isn't longer than what WRF allows (3000 lines max)
-        if (pres.size > 3000): #Downsample to a reasonable number
+        #Check that sounding isn't longer than what WRF allows (1000 lines max)
+        if (pres.size > 999): #Downsample to a reasonable number
             #Determine pressure levels to keep
-            pmid = numpy.linspace(pres[1], pres[-2], 2000) #Only use 2000 levels, because do we really need 3000?
+            pmid = numpy.linspace(pres[1], pres[-2], 900) #Only using 900 levels, to give WRF plenty of space
             bind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)>0][-1] for pm in pmid)))
             tind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)<=0][0] for pm in pmid)))
             new_pres = am.layer_interp(pres[bind], pres[tind], pmid, pres[bind], pres[tind])
@@ -285,11 +387,14 @@ class PySonde:
                     continue
 
                 #Pull metadata
-                self.release_site = dummy[0]
-                self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%Y%m%d%H%M")
-                self.release_lon = float(dummy[5])*mu.deg
-                self.release_lat = float(dummy[4])*mu.deg
-                self.release_elv = float(dummy[3])*mu.meter
+                self.release_site = dummy[-1]
+                try:
+                    self.release_time = datetime.strptime("{}{}".format(dummy[0], dummy[1]), "%y%m%d%H%M")
+                except:
+                    self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%y%m%d%H%M")
+                self.release_lon = float(dummy[-2])*mu.deg
+                self.release_lat = float(dummy[-3])*mu.deg
+                self.release_elv = float(dummy[-4])*mu.meter
 
             #Now for the data rows
             else:
@@ -329,6 +434,9 @@ class PySonde:
         
         #Load the NetCDF file for reading
         fn = nc.Dataset(self.fpath)
+        
+        #Grab the missing value
+        missing_value = fn.variables["dp"].missing_value
 
         #Grab the launch location and time
         try:
@@ -348,12 +456,13 @@ class PySonde:
         #Create a dictionary to hold the sounding
         self.sounding = {}
 
-        #Read in the sounding data
+        #Read in the sounding data and replace missing data with NaNs
         skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
         fkeys = ["time", "pres", "tdry", "dp", "u_wind", "v_wind", "lon", "lat", "alt"]
         for [sk, fk] in zip(skeys, fkeys):
             self.sounding[sk] = numpy.array(fn.variables[fk][:])*self.sounding_units[sk]
-
+            self.sounding[sk][self.sounding[sk] == missing_value*self.sounding_units[sk]] = numpy.nan*self.sounding_units[sk]
+            
         #Close the netcdf file
         fn.close()
 
