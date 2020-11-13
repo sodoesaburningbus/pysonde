@@ -417,10 +417,17 @@ class PySonde:
         wdir = numpy.array(wdir, dtype="float")
         self.sounding["uwind"] = wspd*numpy.cos((270-wdir)*numpy.pi/180.0)
         self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)
+        
+        #Replace missing wind values with Nans
+        self.sounding["uwind"][wspd == -999] = numpy.nan
+        self.sounding["vwind"][wspd == -999] = numpy.nan
 
         #Now convert the other variables to arrays and attach units
+        #And eliminate missing values
         for k in keys:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")
+            self.sounding[k][self.sounding[k] == -999] = numpy.nan
+            self.sounding[k] *= self.sounding_units[k]
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
