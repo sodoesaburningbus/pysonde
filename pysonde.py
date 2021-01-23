@@ -156,7 +156,7 @@ class PySonde:
             height = (sounding["alt"]-self.release_elv/self.sounding_units["alt"])
             theta = at.pot_temp(sounding["pres"]*100.0, sounding["temp"]+273.15)
                     
-            #Locate first location where surface parcel temp is less than environment
+            #Locate first location where surface parcel potential temp is less than environment
             #But still above the surface
             ind_pbl = 0
             ind = 0
