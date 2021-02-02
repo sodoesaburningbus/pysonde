@@ -234,6 +234,46 @@ class PySonde:
         z2 = am.layer_interp(self.sounding["pres"][indb2], self.sounding["pres"][indt2], layer2,
             self.sounding["alt"][indb2], self.sounding["alt"][indt2])
         return z2-z1
+        
+    #Method to extract sounding variables at a single level
+    #This method will interpolate between the two nearest levels.
+    #Inputs:
+    # level, float, pressure level (hPa if no unit attached) for whcih to pull values
+    #Outputs
+    # data, dictionary keyed with sounding variables, contains vallues at
+    #       requested level
+    def extract_level(self, level):
+        
+        #Force level unit to same as sounding
+        try:
+            level.to(self.sounding_units["pres"])
+        except:
+            level = (level*100.0*mu.Pa).to(self.sounding_units["pres"])
+    
+        #Create dictionary to hold data
+        data = {}
+    
+        #Locate nearest levels that bracket the desired level
+        ind = numpy.argmin(abs(self.sounding["pres"]-level))
+        if (self.sounding["pres"][ind] >= level):
+            tind = ind+1
+            bind = ind
+        elif (self.sounding["pres"][ind] < level):
+            tind = ind
+            bind = ind-1
+            
+        {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC,
+            "uwind":mu.meter/mu.second, "vwind":mu.meter/mu.second, "lon":mu.deg,
+            "lat":mu.deg, "alt":mu.meter}
+            
+        #Perfrom the interpolations
+        for k in self.sounding.keys():
+        
+            data[k] = am.layer_interp(self.sounding["pres"][bind], self.sounding["pres"][tind],
+                level, self.sounding[k][bind], self.sounding[k][tind])
+                
+        #Return the extracted level    
+        return data
 
     #####-------------------METHODS TO PLOT OR OUTPUT SOUNDING-------------------#####
 
