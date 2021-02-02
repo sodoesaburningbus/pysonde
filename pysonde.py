@@ -53,7 +53,7 @@ class PySonde:
     ### Inputs:
     ###  fpath, string, file path to sounding. In the case of the web service, this is the station identifier
     ###  sformat, string, options are: "NWS", "CSWR", "EOL", "WEB" see ReadMe for full breakdown
-    ###  date, optional, datetime object for Siphon web service sounding
+    ###  date, optional, required datetime object for Siphon web service sounding. (UTC)
     ###
     ### Outputs:
     ###  None
@@ -234,7 +234,7 @@ class PySonde:
         z2 = am.layer_interp(self.sounding["pres"][indb2], self.sounding["pres"][indt2], layer2,
             self.sounding["alt"][indb2], self.sounding["alt"][indt2])
         return z2-z1
-        
+    
     #Method to extract sounding variables at a single level
     #This method will interpolate between the two nearest levels.
     #Inputs:
@@ -275,16 +275,96 @@ class PySonde:
         #Return the extracted level    
         return data
 
+    ### Method to find low-level jet
+    #This method locates any Low-Level Jet (LLJ) and
+    #determines its strength and location.
+    #The criteria used in this method follows that of Yang et al. 2020
+    #in their study "Understanding irrigation impacts on low-level jets
+    #over the Great Plains" in Climate Dynamics.    
+    #Inputs:
+    # None
+    #Outputs:
+    # jet, dictionary containing the jet characteristics with the following keys:
+    #  "alt" - float, height (m) of the jet.
+    #  "pres" - float, height (hPa) of the jet.
+    #  "wspd" - speed (m/s) of the jet.
+    #  "wdir" - direction (met. deg.) of the jet.
+    #  "category" - integer, type of LLJ following the methodology of Yang et al. 2020.
+    #  "falloff" - float, difference between the LLJ speed maximum and the above minimum.
+    # If no LLJ is present, the dictionary contains NaNs and the category is -1.
+    def find_llj(self):
+
+        #Create the jet dictionary
+        jet = {}
+
+        #Calculate total wind profile
+        wspd = numpy.sqrt(self.sounding["uwind"]**2+self.sounding["vwind"]**2)
+        wdir = (270.0*self.units.degrees-
+            numpy.arctan2(self.sounding["vwind"]/self.sounding_units["vwind"],
+            self.sounding["uwind"]/self.sounding_units["uwind"])*180.0/numpy.pi*
+            self.units.degrees)
+            
+        #Eliminate all values above 700 hPa
+        mask = self.sounding["pres"] >= 700*self.units.hPa
+        wspd = wspd[mask]
+        wdir = wdir[mask]
+        
+        #Locate the maximum wind speed
+        maxind = numpy.argmax(wspd)
+        wmax = wspd[maxind]
+        
+        #Locate the minimum above the jet core
+        minind = numpy.argmin(wspd[maxind:])
+        wmin = wspd[maxind:][minind]
+        
+        #Assign the catgeory
+        ms = self.units.meter/self.units.second #Speed units
+        if ((wmax >= 20*ms) and (wmax-wmin >= 10*ms)): #Mighty LLJ
+            jet["category"] = 3
+        
+        elif ((wmax >= 16*ms) and (wmax-wmin >= 8*ms)): #Strong LLJ
+            jet["category"] = 2
+        
+        elif ((wmax >= 12*ms) and (wmax-wmin >= 6*ms)): #Moderate LLJ
+            jet["category"] = 1
+        
+        elif ((wmax >= 10*ms) and (wmax-wmin >= 5*ms)): #Weak LLJ
+            jet["category"] = 0
+        
+        else: #No LLJ
+            jet["category"] = -1
+            jet["alt"] = numpy.nan*self.sounding_units["alt"]
+            jet["pres"] = numpy.nan*self.sounding_units["pres"]
+            jet["wspd"] = numpy.nan*self.sounding_units["uwind"]
+            jet["wdeg"] = numpy.nan*self.units.degrees
+            jet["falloff"] = numpy.nan*self.sounding_units["uwind"]
+            
+            #Returning if no jet
+            return jet
+            
+        #Fill the dictionary and return
+        jet["alt"] = self.sounding["alt"][mask][maxind]
+        jet["pres"] = self.sounding["pres"][mask][maxind]
+        jet["wspd"] = wmax
+        jet["wdir"] = wdir
+        jet["falloff"] = wmax-wmin
+        
+        #Return jet characteristics
+        return jet
+
     #####-------------------METHODS TO PLOT OR OUTPUT SOUNDING-------------------#####
 
     ### Method to plot a basic sounding
     ### Includes only temperature, dewpoint, and the parcel path
     ### Inputs:
     ###  nbarbs, optional, integer, spacing between wind barbs
+    ###  llj, optional, boolean, whether to check for a Low-level jet and highlight it.
+    ###       Defaults to False.
+    ###  pblh, optional, boolean, whether to plot the PBLH height. Defaults to False.
     ### Outputs:
     ###  fig, the pyplot figure object
     ###  skewt, the MetPy SkewT axis object
-    def basic_skewt(self, nbarbs=None):
+    def basic_skewt(self, nbarbs=None, llj=False, pblh=False):
 
         #Create the empty SkewT
         fig, skewt = self.empty_skewt()
@@ -306,6 +386,16 @@ class PySonde:
         skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
             self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
             fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
+
+        #Add jet highlight
+        if llj:
+            jet = self.find_llj()
+            if (jet["category"] != -1):
+                skewt.ax.axhline(jet["pres"], color="blue")
+        
+        #Add PBLH
+        if pblh:
+            skewt.ax.axhline(self.pblh_pres, color="black", linestyle="--")
 
         #Returning
         return fig, skewt
