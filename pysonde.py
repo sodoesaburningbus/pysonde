@@ -290,6 +290,7 @@ class PySonde:
     #  "wspd" - speed (m/s) of the jet.
     #  "wdir" - direction (met. deg.) of the jet.
     #  "category" - integer, type of LLJ following the methodology of Yang et al. 2020.
+    #    [-1, 3], with -1 being no LLJ and 3 being the strongest LLJ.
     #  "falloff" - float, difference between the LLJ speed maximum and the above minimum.
     # If no LLJ is present, the dictionary contains NaNs and the category is -1.
     def find_llj(self):
