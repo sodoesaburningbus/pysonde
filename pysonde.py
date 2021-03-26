@@ -27,7 +27,7 @@
 ### Module requirements
 ### Python 3+
 ### Matplotlib
-### MetPy
+### MetPy 1.0+
 ### NetCDF4
 ### Numpy
 
@@ -122,7 +122,7 @@ class PySonde:
         try:
         
             #Precipitable Water
-            self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
+            self.pw = mc.precipitable_water(self.sounding["pres"], self.sounding["dewp"])
 
             #Lifting condensation level
             self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0],
