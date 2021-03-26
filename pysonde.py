@@ -64,7 +64,7 @@ class PySonde:
         self.sformat = sformat.upper()
 
         #Attach correct units to sounding object as a dictionary
-        self.sounding_units = {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC,
+        self.sounding_units = {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC, "mixr":mu.g/mu.kg,
             "uwind":mu.meter/mu.second, "vwind":mu.meter/mu.second, "lon":mu.deg, "lat":mu.deg, "alt":mu.meter}
 
         #Attach MetPy unit object so users have access
@@ -97,6 +97,12 @@ class PySonde:
         
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
+
+        #Add mixing ratio to the sounding
+        unitless = self.strip_units()
+        e = at.sat_vaporpres(unitless["dewp"]+273.15)
+        p = unitless["pres"]
+        self.sounding["mixr"] = at.etow(p,e)*1000.0*mu.g/mu.kg
 
         #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
@@ -142,47 +148,67 @@ class PySonde:
         return
 
     #Method to calculate planetary boundary layer height (PBLH) from the sounding
-    #The algorithm finds the first location where the environmental potential temperature is greater
+    #The algorithm finds the first location where the environmental virtual potential temperature is greater
     #than the surface. If a surface inversion is present, than the 
     #If the PBLH cannot be calculated, it is set to -1
     def calculate_pblh(self):
     
         try:
+            #Set Surbace based inversion flag to false initially
+            self.sbi = False
+            self.sbih = numpy.nan
+            self.sbih_pres = numpy.nan
+            self.sbih_ind = None
+        
             #Strip units from sounding for use with atmos package
             sounding = self.strip_units()
             
-            #Calculate sounding potential temeprature and height AGL
-            height = (sounding["alt"]-self.release_elv/self.sounding_units["alt"])
-            theta = at.pot_temp(sounding["pres"]*100.0, sounding["temp"]+273.15)
+            #Calculate sounding potential temperature, temperature gradient, and height AGL
+            height = (sounding["alt"]-self.release_elv/self.sounding_units["alt"]) #Height AGL
+            tgrad = numpy.gradient(sounding["temp"])
+            theta = at.pot_temp(sounding["pres"]*100.0, sounding["temp"]+273.15)                        
+                        
+            #Locate elevated temperature inversion, call that the PBLH
+            ind_pbl = numpy.where(tgrad > 0.0)[0][0]
+
+            #If a surface based inversion exists, then look for the top of the inversion
+            #Re-calculate the PBLH for the overlying remnant layer
+            while (height[ind_pbl] < 100.0):
             
-            #Locate first location where surface parcel potential temp is less than environment
-            ind_pbl = 0
-            ind = 0
-            self.sbi = False
-            while (ind_pbl < 2):
-                ind_pbl = numpy.where(theta[ind] < theta)[0][0]
-                ind += 1
-                if (ind_pbl <= 2):
-                    self.sbi = True
+                #Handle SBI
+                self.sbi = True
+                ind_sbi = numpy.where(tgrad[ind_pbl:] <= 0.0)[0][0]+ind_pbl
+                self.sbih = height[ind_sbi]*self.sounding_units["alt"]
+                self.sbih_pres = sounding["pres"][ind_sbi]*self.sounding_units["pres"]
+                self.sbih_ind = ind_sbi
+                
+                #Re-locate PBL top
+                ind_pbl = numpy.where(tgrad[ind_sbi:] > 0.0)[0][0]+ind_sbi                
+
+            #If no inversion exists below 600 hPa, then use the mixing method
+            if (sounding["pres"][ind_pbl] < 600.0):
             
-            #The SBI code is still quite questionable.
-            #If a surface-based inversion is present
-            #then find the top and call that the PBL top
-            if self.sbi:
-                ind_pbl = numpy.where(numpy.gradient(theta) <= 0.0)[0][0]
+                #Locate first location where surface parcel potential temp is less than environment
+                ind_pbl = 0
+                ind = 0
+                while (ind_pbl < 2): #To avoid getting stuck at the surface
+                    ind_pbl = numpy.where(theta[ind] < theta)[0][0]
+                    ind += 1
             
+            #Retreive PBL top height and pressure
             pblh = height[ind_pbl]*self.sounding_units["alt"]
             pblh_pres = sounding["pres"][ind_pbl]*self.sounding_units["pres"]
                     
             #Store PBLH as attribute of sounding
             self.pblh = pblh
             self.pblh_pres = pblh_pres
+            self.pblh_ind = ind_pbl
            
         except Exception as err:
             print("WARNING: PBL top could not be found due to:\n{}".format(err))
             self.pblh = numpy.nan
             self.pblh_pres = numpy.nan
-            self.sbi = False
+            self.pblh_ind = None
     
         #Returning
         return
@@ -355,7 +381,7 @@ class PySonde:
     ### Outputs:
     ###  fig, the pyplot figure object
     ###  skewt, the MetPy SkewT axis object
-    def basic_skewt(self, nbarbs=None, llj=False, pblh=False):
+    def basic_skewt(self, nbarbs=None, llj=False, pblh=False, sbi=False):
 
         #Create the empty SkewT
         fig, skewt = self.empty_skewt()
@@ -387,6 +413,10 @@ class PySonde:
         #Add PBLH
         if pblh:
             skewt.ax.axhline(self.pblh_pres, color="black", linestyle="--")
+            
+        #Add SBI
+        if (sbi and self.sbi):
+            skewt.ax.axhline(self.sbih_pres, color="black", linestyle=":")
 
         #Returning
         return fig, skewt
@@ -408,7 +438,10 @@ class PySonde:
         #Add the adiabats, etc
         skewt.plot_dry_adiabats(t0=numpy.arange(-40, 200, 10)*self.sounding_units["temp"])
         skewt.plot_moist_adiabats()
-        skewt.plot_mixing_lines(pressure=self.sounding["pres"])
+        try:
+            skewt.plot_mixing_lines(pressure=self.sounding["pres"])
+        except:
+            skewt.plot_mixing_lines(p=self.sounding["pres"])
 
         #Adjust the axis labels
         skewt.ax.set_xlabel("Temperature ('C)", fontsize=14, fontweight="bold")
