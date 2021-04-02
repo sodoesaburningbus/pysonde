@@ -102,7 +102,7 @@ class PySonde:
         unitless = self.strip_units()
         e = at.sat_vaporpres(unitless["dewp"]+273.15)
         p = unitless["pres"]
-        self.sounding["mixr"] = at.etow(p,e)*1000.0*mu.g/mu.kg
+        self.sounding["mixr"] = at.etow(p*100.0,e)*1000.0*mu.g/mu.kg
 
         #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
@@ -114,7 +114,7 @@ class PySonde:
         return
 
     #####-----------METHODS TO CALCULATE SOUNDING PROPERTIES-----------#####
-
+    
     #Method to calculate basic thermodynamic properties of the sounding.
     def calculate_basic_thermo(self):
 
@@ -135,8 +135,8 @@ class PySonde:
                 self.sounding["dewp"], self.parcel_path)
 
         #Do this when parcel path fails to converge
-        except:
-            print("WARNING: Parcel path did not converge. No LCL, CAPE, or PW stats.")
+        except Exception as e:
+            print("WARNING: No LCL, CAPE, or PW stats because:\n{}.".format(e))
             self.parcel_path = numpy.nan
             self.pw = numpy.nan
             self.lcl_pres = numpy.nan
@@ -146,6 +146,52 @@ class PySonde:
                 
         #Returning
         return
+
+    #Method to calculate geopotential height from sounding
+    #Integrates the hypsomteric equation using a 3rd order
+    #Adams-Bashforth scheme.
+    #Inputs,
+    # units, optional, boolean, whether to return geopotential height profile with units attached
+    #        defaults to True
+    def calculate_gph(self, units=True):
+    
+        #Strip units from sounding while integrating
+        sounding = self.strip_units()
+        
+        #Convert units
+        pres = sounding["pres"]*100.0 #hPa -> Pa
+        temp = sounding["temp"]+273.15 #'C -> K
+        mixr = sounding["mixr"]/1000.0 #g/kg -> kg/kg
+                
+        #Calculate virtual temperature
+        vtemp = at.virt_temp(temp, mixr)
+        
+        #If first element isn't finite, then replace with temperature
+        if (not numpy.isfinite(vtemp[0])):
+            vtemp[0] = temp[0]
+                
+        #Loop across the soudning profile while summing layer thickness
+        z = [0]
+        j = 1
+        for i in range(1, pres.size):
+        
+            tvbar = am.layer_interp(pres[i-j], pres[i], (pres[i-j]+pres[i])/2.0, vtemp[i-j], vtemp[i])
+            dz = at.hypsometric(pres[i-j], pres[i], tvbar)
+            z.append(z[-j]+dz)
+            
+            #For handling layers with missing data
+            if (not numpy.isfinite(dz)):
+                j += 1
+            else:
+                j = 1
+
+        #Convert to numpy array and add release elevation
+        if units:
+            gph = numpy.array(z)*self.sounding_units["alt"]+self.release_elv
+        else:
+            gph = numpy.array(z)+numpy.array(self.release_elv/self.sounding_units["alt"])
+        
+        return gph
 
     #Method to calculate planetary boundary layer height (PBLH) from the sounding
     #The algorithm finds the first location where the environmental virtual potential temperature is greater
