@@ -499,7 +499,7 @@ class PySonde:
     ### Method to output sounding to a text file
     ### Inputs:
     ###  spath, string, full path on which to save file
-    def write_text(self, spath):
+    def write_csv(self, spath):
     
         #First strip all units from sounding
         unitless = self.strip_units()
