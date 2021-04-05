@@ -495,6 +495,35 @@ class PySonde:
 
         #Returning
         return fig, skewt
+    
+    ### Method to output sounding to a text file
+    ### Inputs:
+    ###  spath, string, full path on which to save file
+    def write_text(self, spath):
+    
+        #First strip all units from sounding
+        unitless = self.strip_units()
+        
+        {"time":mu.second, "pres":mu.hPa, "temp":mu.degC, "dewp":mu.degC, "mixr":mu.g/mu.kg,
+            "uwind":mu.meter/mu.second, "vwind":mu.meter/mu.second, "lon":mu.deg, "lat":mu.deg, "alt":mu.meter}
+        
+        #Open file and write header
+        fn = open(spath, "w")
+        header = "Time (s)\tGPH (m)\tPrs (hPa)\tTemp ('C)\tMixR (g/kg)\tDewp ('C)\tUspd (m/s)\tVspd (m/s)\tLon\tLat".split("\t")
+        fn.write(("{:>12}"+",{:>12}"*(len(header)-1)).format(*header))
+        
+        #Now loop through the data
+        for i in range(unitless["pres"].size):
+            data = (unitless["time"][i], unitless["alt"][i], unitless["pres"][i], unitless["temp"][i],
+                unitless["mixr"][i], unitless["dewp"][i], unitless["uwind"][i], unitless["vwind"][i],
+                unitless["lon"][i], unitless["lat"][i])
+            fn.write(("\n{:>12.2f}"+",{:>12.2f}"*(len(header)-1)).format(*data))
+            
+        #Close the file
+        fn.close()
+    
+        #Returning
+        return
 
     ### Method to output WRF SCM input sounding
     ### Inputs:
@@ -763,14 +792,14 @@ class PySonde:
         self.release_lon = sounding["longitude"].values[0]*mu(sounding.units["longitude"]).to(mu.deg)
         self.release_elv = sounding["elevation"].values[0]*mu(sounding.units["elevation"]).to(mu.meter)
         
-        skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
-        wkeys = ["time", "pressure", "temperature", "dewpoint", "u_wind", "v_wind",
+        skeys = ["pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
+        wkeys = ["pressure", "temperature", "dewpoint", "u_wind", "v_wind",
             "longitude", "latitude", "height"]
         for sk, wk in zip(skeys, wkeys):
-            if (sk == "time"):
-                self.sounding[sk] = numpy.nan
-            else:
-                self.sounding[sk] = sounding[wk].values*mu(sounding.units[wk]).to(self.sounding_units[sk])
+            self.sounding[sk] = sounding[wk].values*mu(sounding.units[wk]).to(self.sounding_units[sk])
+        
+        #Fill in time array with Nans
+        self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
         
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
