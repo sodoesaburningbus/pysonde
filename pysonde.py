@@ -616,14 +616,21 @@ class PySonde:
                     continue
 
                 #Pull metadata
-                self.release_site = dummy[-1]
-                try:
-                    self.release_time = datetime.strptime("{}{}".format(dummy[0], dummy[1]), "%y%m%d%H%M")
+                try: #header isn't always in the same order
+                    self.release_site = dummy[0]
+                    self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%Y%m%d%H%M")
+                    self.release_lon = float(dummy[5])*mu.deg
+                    self.release_lat = float(dummy[4])*mu.deg
+                    self.release_elv = float(dummy[3])*mu.meter
                 except:
-                    self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%y%m%d%H%M")
-                self.release_lon = float(dummy[-2])*mu.deg
-                self.release_lat = float(dummy[-3])*mu.deg
-                self.release_elv = float(dummy[-4])*mu.meter
+                    self.release_site = dummy[-1]
+                    try:
+                        self.release_time = datetime.strptime("{}{}".format(dummy[0], dummy[1]), "%y%m%d%H%M")
+                    except:
+                        self.release_time = datetime.strptime("{}{}".format(dummy[1], dummy[2]), "%y%m%d%H%M")
+                    self.release_lon = float(dummy[-2])*mu.deg
+                    self.release_lat = float(dummy[-3])*mu.deg
+                    self.release_elv = float(dummy[-4])*mu.meter
 
             #Now for the data rows
             else:
