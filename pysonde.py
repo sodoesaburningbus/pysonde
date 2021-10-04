@@ -193,32 +193,32 @@ class PySonde:
     #Outputs,
     # logCn2, array of floats, log10 of Cn2
     def calculate_Cn2(self):
-        
+
         #Assume a value of 150 m for the outer-scale length, L0.
         #This is from Fiorino but will be updated to real calculations.
         L0 = 150
 
         #Strip units from sounding
         sounding = self.strip_units()
-        
+
         #Adjust units
         sounding["temp"] += 273.15
         sounding["pres"] *= 100.0
         sounding["dewp"] += 273.15
         sounding["mixr"] /= 1000.0
         sounding["pot_temp"] += 273.15
-        
+
         #Compute virtual temperature and virtula potential temperature
         vtemp = at.virt_temp(sounding["temp"], sounding["mixr"])
         thetaV = sounding["pot_temp"]*(1.0+0.61*sounding["mixr"])
 
         #Compute vapor pressure (in hPa)
         ev = sounding["mixr"]*sounding["pres"]/(at.RD/at.RV+sounding["mixr"])/100.0
-        
+
         #Compute perturabtion pressure (in hPa)
         #Perturbations are departures from hydrostaty
         pp = sounding["pres"]/100.0-self.calculate_pres(units=False)
-        
+
         #Compute necessary atmospheric gradients
         dTdz = numpy.gradient(sounding["temp"], sounding["alt"])
         dTHvdz = numpy.gradient(thetaV, sounding["alt"])
@@ -227,30 +227,30 @@ class PySonde:
         dVdz = numpy.gradient(sounding["vwind"], sounding["alt"])
         dEvdz = numpy.gradient(ev, sounding["alt"])
         dPdz = numpy.gradient(pp, sounding["alt"])
-        
+
         #Compute Richardson number
         Ri = at.G/vtemp*dTHvdz/(dUdz**2+dVdz**2)
-        
+
         #Compute eddy diffusivity ratio (based on Fiorino and Meier 2016)
         khkm = numpy.where(Ri <= 1.0, 1.0/(6.873*Ri+(1.0/1.0+6.873*Ri)), Ri/7.0)
         khkm = numpy.where(Ri < 0.01, numpy.nan, khkm)
-        
+
         #Cn2 expanding dn/dz in terms of potental temperature and vapor pressure, and pressure pert.
         #Fiorino and Meier 2016 (Optics InfoBase Conference Papers)
         dndT = -1*(10**(-6)) * ((79.0*sounding["pres"]/100.0/sounding["temp"]**2) + 9600*ev/sounding["temp"]**3)
         dndev = 10**(-6)*4800.0/sounding["temp"]**2
         dndp = 10**(-6)*79.0/sounding["temp"]
         Cn2 = 2.8**2*khkm*(L0**(4.0/3.0))*(dndT*dTHdz+dndp*dPdz+dndev*dEvdz)**2
-        
+
         #Replace infinities with NaNs
         Cn2[~numpy.isfinite(Cn2)] = numpy.nan
-        
+
         #Compute logarithmic value
         logCn2 = numpy.log10(Cn2)
-        
+
         #Remove unrealistically large values
         logCn2[logCn2 > 0] = numpy.nan
-        
+
         #Return Cn2
         return logCn2
 
@@ -1364,7 +1364,9 @@ class PySonde:
         try: #Fails during the initial PBLH calculation
             unitless = {"release_site":self.release_site, "release_lat":numpy.array(self.release_lat),
                 "release_lon":numpy.array(self.release_lon), "release_elv":numpy.array(self.release_elv),
-                "release_time":self.release_time, "pblh":numpy.array(self.pblh), "pblh_pres":numpy.array(self.pblh_pres)}
+                "release_time":self.release_time, "pblh":numpy.array(self.pblh), "pblh_pres":numpy.array(self.pblh_pres),
+                "lcl_pres":numpy.array(self.lcl_pres), "lcl_temp":numpy.array(self.lcl_temp), "lcl_alt":numpy.array(self.lcl_alt),
+                "lfc_pres":numpy.array(self.lfc_pres), "lfc_temp":numpy.array(self.lfc_temp), "lfc_alt":numpy.array(self.lfc_alt)}
         except:
             unitless = {"release_site":self.release_site, "release_lat":numpy.array(self.release_lat),
                 "release_lon":numpy.array(self.release_lon), "release_elv":numpy.array(self.release_elv),
