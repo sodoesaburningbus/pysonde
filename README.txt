@@ -28,6 +28,21 @@ Numpy
 
 ------------------------------------INSTALLATION------------------------------------
 
+The PySonde package must currently be installed manually due to the atmos dependency:
+
+  Get atmos:
+    git clone https://github.com/sodoesaburningbus/atmos
+    cd atmos
+    python3 setup.py install
+    cd ..
+
+  Get PySonde:
+    git clone https://github.com/sodoesaburningbus/pysonde
+    cd pysonde
+    python3 setup.py install
+    cd ..
+  
+
 ------------------------------------CURRENT AND FUTURE SOUNDING FORMATS------------------------------------
 
 Currently supports:
@@ -44,7 +59,7 @@ Future updates also plan to add support for the following sounding formats
   UAH UPSTORM soundings
   SPC sounding archive
   
-------------------------------------CURRENT AND FUTURE FEATURES------------------------------------
+------------------------------------CURRENT FEATURES------------------------------------
 
 All methods and attributes are fully documented in the PySonde.py module file.
 Summaries are presented here.
@@ -117,9 +132,13 @@ Currently, the PySonde object has the following attributes and methods:
     
   sonde.
 
-Future updates also plan to add the following features
-  Options to calculate mixed layer and most unstable CAPE
-  Removal of ATMOS as a dependency
+------------------------------------FUTURE UPDATES------------------------------------
+
+Removal of atmos as a dependency
+
+Add installation via pip
+
+Options to calculate mixed layer and most unstable CAPE
 
 ---------------------------------------------EXAMPLES---------------------------------------------
 
