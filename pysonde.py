@@ -255,8 +255,7 @@ class PySonde:
         return logCn2
 
     #Method to calculate geopotential height from sounding
-    #Integrates the hypsomteric equation using a 3rd order
-    #Adams-Bashforth scheme.
+    #Integrates the hypsomteric equation.
     #Inputs,
     # units, optional, boolean, whether to return geopotential height profile with units attached
     #        defaults to True
@@ -362,8 +361,8 @@ class PySonde:
         return hpres
 
     #Method to calculate planetary boundary layer height (PBLH) from the sounding
-    #The algorithm finds the first location where the environmental virtual potential temperature is greater
-    #than the surface. If a surface inversion is present, than the
+    #The algorithm finds the first location where the environmental potential temperature is greater
+    #than the surface. If a surface inversion is present, than the top of the inversion is called the PBL top.
     #If the PBLH cannot be calculated, it is set to -1
     def calculate_pblh(self):
 
@@ -794,6 +793,64 @@ class PySonde:
 
         #Returning
         return
+
+    ### Method to output RAMS input sounding
+    ### This sounding is suitable for reading into the RAMS model
+    ### with the following namelist options:
+    ###  IPSFLG = 0
+    ###  ITSFLG = 0
+    ###  IRTSFLG = 0
+    ###  IUSFLG = 0
+    ###  
+    ### Inputs:
+    ###  spath, string, location to save file to
+    ###  maxz, optional, float, maximum height of RAMS sounding in meters
+    ###    if None, then the maximum height of the sounding is used
+    ###    defaults to None
+    def write_rams(self, spath, maxz=None):
+    
+        #Strip units from sounding
+        sounding = self.strip_units()
+    
+        #Check if user supplied maximum height
+        if (maxz == None):
+            zind = sounding["alt"].size-1
+        else:
+            zind = numpy.arange(sounding["alt"].size)[sounding["alt"]>maxz][0]
+            
+        #Check length of sounding to see if it fits within the RAMS 200pt limit
+        #Interpolate if necessary (assume linear in log-p coordinates)
+        if (sounding["alt"][:zind].size > 200):
+            
+            #Get first and last pressure levels for interpolation
+            p0 = sounding["pres"][0]
+            pf = sounding["pres"][zind]
+            
+            #Create evenly spaced pressure levels
+            ip = numpy.linspace(p0, pf, 200, endpoint=True)
+        
+            #Interpolate       
+            for k in ["dewp", "temp", "uwind", "vwind", "alt"]:
+                sounding[k] = numpy.interp(numpy.log(ip[::-1]), numpy.log(sounding["pres"][::-1]), sounding[k][::-1])[::-1]
+            sounding["pres"] = ip
+            
+        #Replace any missing values with 9999
+        #9999 is based on the missing wind value in subroutine ARRSND of file rhhi.f90
+        #in the RAMS initialization code.
+        for k in ["dewp", "temp", "uwind", "vwind", "alt"]:
+            sounding[k][~numpy.isfinite(sounding[k])] = 9999
+            
+        #Write out sounding
+        fn = open(spath, "w")
+        fn.write("{:.4f} {:.4f} {:.4f} {:.4f} {:.4f}".format(
+            sounding["pres"][0], sounding["temp"][0], sounding["dewp"][0],
+            sounding["uwind"][0], sounding["vwind"][0]))
+        for i in range(1, sounding["pres"].size):
+            fn.write("\n{:.4f} {:.4f} {:.4f} {:.4f} {:.4f}".format(
+            sounding["pres"][i], sounding["temp"][i], sounding["dewp"][i],
+            sounding["uwind"][i], sounding["vwind"][i]))
+        fn.close()
+            
 
     ### Method to output WRF SCM input sounding
     ### Inputs:
