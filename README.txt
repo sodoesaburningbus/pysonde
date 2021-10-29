@@ -7,7 +7,7 @@ other applications such as input to the WRF SCM.
 By default, the object supports unit aware computing, but the option exists to strip
 units from the sounding.
 
-The object only supports one sounding per file. The reader will likely break. If it does not, use
+The object only supports one sounding per file. If more are present, the reader will likely break. If it does not, use
 the output at your own risk.
 
 If this code is useful in a research project, please contact 
