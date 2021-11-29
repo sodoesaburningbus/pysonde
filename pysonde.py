@@ -35,8 +35,8 @@
 ### Numpy
 
 ### Importing required modules
-import pysonde.math as am
-import pysonde.thermo as at
+import pysonde.atmos_math as am
+import pysonde.atmos_thermo as at
 from datetime import datetime
 from datetime import timedelta
 import matplotlib.pyplot as pp
