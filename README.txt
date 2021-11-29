@@ -28,13 +28,12 @@ Numpy
 
 ------------------------------------INSTALLATION------------------------------------
 
-The PySonde package must currently be installed manually due to the atmos dependency:
+The PySonde package may be installed with pip:
 
-  Get atmos:
-    git clone https://github.com/sodoesaburningbus/atmos
-    cd atmos
-    python3 setup.py install
-    cd ..
+    pip install git+https://github.com/sodoesaburningbus/pysonde
+
+
+Or manually:
 
   Get PySonde:
     git clone https://github.com/sodoesaburningbus/pysonde
