@@ -18,6 +18,7 @@
 ###  NWS - NWS high density soundings
 ###  CSWR - Center for Severe Weather Research L2 soundings
 ###  EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
+###  UAH - University of Alabama in Huntsville UPSTORM group soundings
 ###  WEB - University of Wyoming sounding online archive (these are pulled from online)
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
@@ -90,6 +91,9 @@ class PySonde:
         elif (self.sformat == "CSWR"): #CSWR sounding
             self.read_cswr()
 
+        elif (self.sformat == "UAH"): # UAH UPSTORM format
+            self.read_uah()
+
         elif (self.sformat == "WYO"): #University of Wyoming sounding
             self.read_wyoming()
 
@@ -108,21 +112,21 @@ class PySonde:
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
 
-        #Add potential temperature to the sounding
+        # Add potential temperature to the sounding
         unitless = self.strip_units()
         self.sounding["pot_temp"] = (at.pot_temp(unitless["pres"]*100.0,
             unitless["temp"]+273.15)-273.15)*self.sounding_units["pot_temp"]
 
-        #Add mixing ratio to the sounding
+        # Add mixing ratio to the sounding
         if ((self.sformat != "PSF") and (self.sformat != "CSV")): #These already contains mixing ratio
             e = at.sat_vaporpres(unitless["dewp"]+273.15)
             p = unitless["pres"]
             self.sounding["mixr"] = at.etow(p*100.0,e)*1000.0*self.sounding_units["mixr"]
 
-        #Calculate planetary boundary layer height
+        # Calculate planetary boundary layer height
         self.calculate_pblh()
 
-        #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
+        # Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
 
         #Returning
@@ -1113,7 +1117,7 @@ class PySonde:
         fn = open(self.fpath)
         for line in fn:
 
-            #First check if w
+            #First check if in header
             if header:
                 if ("Release Site" in line):
                     self.release_site = line.split()[4]
@@ -1220,6 +1224,74 @@ class PySonde:
         fn.close()
 
         #Returning
+        return
+    
+    ### Method read in soundings that are in the UAH UPSTORM group format
+    def read_uah(self):
+    
+        # Create a dictionary to hold the sounding
+        keys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
+        self.sounding = {}
+        for k in keys:
+            self.sounding[k] = []
+
+        # Read the file
+        fn = open(self.fpath)
+        lines = [line for line in fn]
+        
+        # Pull the header information
+        header = lines[1].strip("#").split(",")
+        loc = lines[3].split(",")
+        self.release_site = header[2]+", "+header[3]
+        self.release_time = datetime.strptime(header[0].strip()+header[1].strip(), "%Y%m%d%H%M UTC")
+        self.release_lon = float(loc[0])*mu.deg
+        self.release_lat = float(loc[1])*mu.deg
+        self.release_elv = float(header[4].strip()[:-1])*mu.meter
+        
+        # Read in the data
+        wspd = []
+        wdir = []
+        for line in lines[3:]:
+
+            # Check for end of file
+            if ("END" in line):
+                break
+
+            # Split line into columns
+            dummy = line.split(",")
+            print(dummy)
+            
+            # Pull data
+            self.sounding["time"].append((datetime.strptime("{}{}".format(header[0].strip(), dummy[2].strip()), "%Y%m%d%H:%M:%S")-
+                self.release_time).total_seconds())
+            self.sounding["lon"].append(dummy[0])
+            self.sounding["lat"].append(dummy[1])
+            self.sounding["alt"].append(dummy[3])
+            self.sounding["pres"].append(dummy[4])
+            self.sounding["temp"].append(dummy[5])
+            self.sounding["dewp"].append(dummy[7])
+            wspd.append(dummy[8])
+            wdir.append(dummy[9].strip())
+
+        # Once the data has been read in, convert everything to numpy arrays and attach units
+        for k in keys:
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+
+        # Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
+        # Compute wind speed components in m/s
+        wspd = numpy.array(wspd, dtype="float")*0.514
+        wdir = numpy.array(wdir, dtype="float")
+
+        self.sounding["uwind"] = wspd*numpy.cos((270-wdir)*numpy.pi/180.0)*self.sounding_units["uwind"]
+        self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)*self.sounding_units["vwind"]
+
+        # Close the sounding object
+        fn.close()
+
+        # Returning
         return
 
     ### Method to pull Univ. of Wyoming Sounding from internet with Siphon
