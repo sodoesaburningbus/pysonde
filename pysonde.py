@@ -860,6 +860,12 @@ class PySonde:
         #First strip all units from sounding
         unitless = self.strip_units()
 
+        # Remove any lines with missing data
+        # Use dewpoint because if anything is missing, dewpoint will be.
+        mask = numpy.isfinite(unitless["dewp"])
+        for k in self.sounding_units.keys():
+            unitless[k] = unitless[k][mask]
+
         #Do necessary unit conversions
         heights = unitless["alt"]
         temp = unitless["temp"]+273.15 #C -> K
@@ -867,11 +873,13 @@ class PySonde:
 
         #Calculate necessary surface variables
         #First compute 10m winds from the sounding using linear interpolation
-        ind2 = (numpy.arange(heights.size, dtype="int")[(heights-10)>0])[0]
+        ind2 = (numpy.arange(heights.size, dtype="int")[(heights-10)>heights[0]])[0]
         ind1 = ind2-1
-        weight = (10.0-heights[ind1])/(heights[ind2]-heights[ind1])
-        u10 = unitless["uwind"][ind1]*(1-weight)+unitless["uwind"][ind2]*weight
-        v10 = unitless["vwind"][ind1]*(1-weight)+unitless["vwind"][ind2]*weight
+        
+        # Interpolate winds to 10 m
+        weight = (10.0-(heights[ind1]-heights[0]))/(heights[ind2]-heights[ind1])
+        u10 = (unitless["uwind"][ind1]*(1-weight))+(unitless["uwind"][ind2]*weight)
+        v10 = (unitless["vwind"][ind1]*(1-weight))+(unitless["vwind"][ind2]*weight)
 
         #Calculate potential temperature and mixing ratio at each level of the sounding
         theta = at.pot_temp(pres, temp)
@@ -899,9 +907,13 @@ class PySonde:
 
         #Write everything to the output file
         fn = open(spath, "w")
-        fn.write("{} {} {} {} {} {}".format(unitless["release_elv"], u10, v10, theta[0], qvapor[0], pres[0]))
+        fn.write("{:.3f} {:.3f} {:.3f} {:.3f} {:.3f} {:.3f}".format(
+            unitless["release_elv"], u10, v10, theta[0], qvapor[0], pres[0]))
+            
         for i, h in enumerate(new_height[1:]):
-            fn.write("\n{} {} {} {} {}".format(h, new_uwind[i], new_vwind[i], new_theta[i], new_qvapor[i]))
+            fn.write("\n{:.3f} {:.3f} {:.3f} {:.3f} {:.3f}".format(
+                h, new_uwind[i+1], new_vwind[i+1], new_theta[i+1], new_qvapor[i+1]))
+                
         fn.close()
 
         #Returning
@@ -1264,7 +1276,7 @@ class PySonde:
 
             #Split the line into columns
             dummy = line.split()
-
+                        
             #Handle the first line
             if first:
                 first = False
@@ -1334,8 +1346,8 @@ class PySonde:
         self.sounding["pres"] = pres/100.0*self.sounding_units["pres"] #Pa -> hPa
         self.sounding["temp"] = (temp-273.15)*self.sounding_units["temp"] #K -> 'C
         self.sounding["dewp"] = (at.dewpoint(at.wtoe(pres, qvapor))-273.15)*self.sounding_units["dewp"]
-        self.sounding["lon"] = numpy.nan*self.sounding_units["lon"]
-        self.sounding["lat"] = numpy.nan*self.sounding_units["lat"]
+        self.sounding["lon"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["lon"]
+        self.sounding["lat"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["lat"]
 
         #Attach meta data
         self.release_time = datetime(2000, 1, 1)
