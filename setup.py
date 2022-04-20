@@ -5,7 +5,7 @@ with open("README.txt", "r") as fn:
 
 setuptools.setup(
     name="PySonde",
-    version="0.6.0",
+    version="0.7.0",
     author="Christopher Phillips of UAH, Huntsville, Alabama",
     author_email="cephillips574@gmail.com",
     description="A python package for reading and analyzing several common weather balloon sounding formats.",
@@ -19,5 +19,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.0',
-    install_requires=["metpy>=1.0"]
+    install_requires=["metpy>=1.0", "numpy", "siphon"]
 )
