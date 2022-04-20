@@ -11,7 +11,7 @@
 ### The object only supports one sounding per file. If more are present, only the first
 ### will be read in, if the reader doesn't break.
 ###
-### Written by Christopher Phillips
+### Written by Christopher Phillips, Therese Parks
 ### University of Alabama in Huntsville, June 2020
 ###
 ### Currently supports:
@@ -19,9 +19,10 @@
 ###  CSWR - Center for Severe Weather Research L2 soundings
 ###  EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
 ###  UAH - University of Alabama in Huntsville UPSTORM group soundings
-###  WEB - University of Wyoming sounding online archive (these are pulled from online)
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
+###  WYOWEB - University of Wyoming sounding online archive. (These are pulled from online.)
+###  IGRA2 - The IGRA2 online sounding archive. (These are pulled from online.)
 ###  PSF - PySonde Sounding Format, a netCDF4 format more fully described in the documentation.
 ###  CSV - CSV files originally outputted by PySonde
 ###
@@ -47,6 +48,7 @@ from metpy.plots import SkewT
 import netCDF4 as nc
 import numpy
 from siphon.simplewebservice.wyoming import WyomingUpperAir
+from siphon.simplewebservice.igra2 import IGRAUpperAir
 
 ############################################################
 #---------------------     PYSONDE     ---------------------#
@@ -56,8 +58,8 @@ class PySonde:
     ### Constructor Method
     ### Inputs:
     ###  fpath, string, file path to sounding. In the case of the web service, this is the station identifier
-    ###  sformat, string, options are: "NWS", "CSWR", "EOL", "WEB" see ReadMe for full breakdown
-    ###  date, optional, required datetime object for Siphon web service sounding. (UTC)
+    ###  sformat, string, some options are: "NWS", "CSWR", "EOL", "IGRA2" see ReadMe for full breakdown
+    ###  date, optional, required datetime object for Siphon web service sounding (WYOWEB, IGRA2). (UTC)
     ###
     ### Outputs:
     ###  None
@@ -108,6 +110,9 @@ class PySonde:
 
         elif (self.sformat == "CSV"):
             self.read_csv()
+            
+        elif (self.sformat == "IGRA2"): # IGRA2 online archive
+            self.read_igra2(date)
 
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
@@ -1472,6 +1477,41 @@ class PySonde:
         wdir = numpy.array(wdir, dtype="float")
         self.sounding["uwind"] = (numpy.array(wspd*numpy.cos((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["uwind"])
         self.sounding["vwind"] = (numpy.array(wspd*numpy.sin((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["vwind"])
+
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
+        #Returning
+        return
+
+    ### Method to pull IGRA2 Sounding from internet with Siphon
+    ### Input, date, datetime object, date for which to pull sounding
+    ### Written by Therese Parks, UAH
+    def read_igra2(self, date):
+
+        #Pull down the sounding
+        sounding, header = IGRAUpperAir.request_data(date, self.fpath)
+        
+        #Convert sounding to proper data format and attach to PySonde object
+        self.release_time = datetime.utcfromtimestamp(header["release_time"].values[0].tolist()/1e9)
+        self.release_site = header["site_id"].values[0]
+        self.release_lat = header["latitude"].values[0]*mu(header.units["latitude"]).to(mu.deg)
+        self.release_lon = header["longitude"].values[0]*mu(header.units["longitude"]).to(mu.deg)
+        self.release_elv = sounding["height"].values[0]*mu(sounding.units["height"]).to(mu.meter)
+
+        s1keys = ["pres", "temp", "dewp", "uwind", "vwind", "alt"]
+        s2keys = ["lon", "lat"]
+        sounding_keys = ["pressure", "temperature", "dewpoint", "u_wind", "v_wind", "height"]
+        header_keys = ["longitude", "latitude"]
+        for sk, soundk in zip(s1keys, sounding_keys):
+            self.sounding[sk] = sounding[soundk].values*mu(sounding.units[soundk]).to(self.sounding_units[sk])
+
+        for sk, headk in zip(s2keys, header_keys):
+          self.sounding[sk] = header[headk].values*mu(header.units[headk]).to(self.sounding_units[sk])
+
+        #Fill in time array with Nans
+        self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
