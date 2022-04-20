@@ -48,14 +48,15 @@ Currently supports:
   NWS - NWS high density soundings
   CSWR - Center for Severe Weather Research L2 soundings
   EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
-  WEB - University of Wyoming sounding online archive (these are pulled from online)
+  UAH - University of Alabama in Huntsville UPSTORM group soundings
   WRF - Weather Research and Forecasting Single Column Model Input Sounding
   WYO - University of Wyoming sounding file
-  PSF - Experimental netCDF4 PySonde format not fully supported.
+  WYOWEB - University of Wyoming sounding online archive. (These are pulled from online.)
+  IGRA2 - The IGRA2 online sounding archive. (These are pulled from online.)
+  PSF - PySonde Sounding Format, a netCDF4 format more fully described in the documentation.
   CSV - CSV files originally outputted by PySonde
 
 Future updates also plan to add support for the following sounding formats
-  UAH UPSTORM soundings
   SPC sounding archive
   
 ------------------------------------CURRENT FEATURES------------------------------------
@@ -101,7 +102,7 @@ Currently, the PySonde object has the following attributes and methods:
       highlighting the PBL top, LLJ, and any surface-based inversion. Wind barb spacing can also be passed in.
   
     calculate_Cn2() - Compute the index of refraction structure parameter Cn^2 using the methodology
-      found in Fiorino and Meier 2016 "Improving the Fiedelity of the Tatarskii Cn2 Calculation with Inclusion
+      found in Fiorino and Meier 2016 "Improving the Fidelity of the Tatarskii Cn2 Calculation with Inclusion
       of Pressure Perturbations"
     
     calculate_gph(units=True) - Compute geopotential height from the sounding by integrating the hypsometric equation.
@@ -133,8 +134,6 @@ Currently, the PySonde object has the following attributes and methods:
 
 ------------------------------------FUTURE UPDATES------------------------------------
 
-Removal of atmos as a dependency
-
 Add installation via pip
 
 Options to calculate mixed layer and most unstable CAPE
@@ -155,14 +154,3 @@ Accessing the sounding data (e.g. temperature) may then be accomplished via:
 sounding_file_path, string, path to file containing a single sounding
 format_code, string, format of the sounding, see below for the options
 units, boolean, optional, default=True, whether to attach units to variables via MetPy.
-
-The available sounding formats at this time are:
-
-  "NWS" - NWS high density soundings
-  "CSWR" - Center for Severe Weather Research L2 soundings
-  "EOL" - National Center for Atmospheric Research - Earth Observing Laboratory soundings
-  "WEB" - University of Wyoming sounding online archive (these are pulled from online)
-  "WRF" - Weather Research and Forecasting Single Column Model Input Sounding
-  "WYO" - University of Wyoming sounding file
-  "PSF" - Experimental netCDF4 PySonde format not fully supported.
-  "CSV" - CSV files originally outputted by PySonde

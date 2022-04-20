@@ -11,16 +11,18 @@
 ### The object only supports one sounding per file. If more are present, only the first
 ### will be read in, if the reader doesn't break.
 ###
-### Written by Christopher Phillips
+### Written by Christopher Phillips, Therese Parks
 ### University of Alabama in Huntsville, June 2020
 ###
 ### Currently supports:
 ###  NWS - NWS high density soundings
 ###  CSWR - Center for Severe Weather Research L2 soundings
 ###  EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
-###  WEB - University of Wyoming sounding online archive (these are pulled from online)
+###  UAH - University of Alabama in Huntsville UPSTORM group soundings
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
+###  WYOWEB - University of Wyoming sounding online archive. (These are pulled from online.)
+###  IGRA2 - The IGRA2 online sounding archive. (These are pulled from online.)
 ###  PSF - PySonde Sounding Format, a netCDF4 format more fully described in the documentation.
 ###  CSV - CSV files originally outputted by PySonde
 ###
@@ -46,6 +48,7 @@ from metpy.plots import SkewT
 import netCDF4 as nc
 import numpy
 from siphon.simplewebservice.wyoming import WyomingUpperAir
+from siphon.simplewebservice.igra2 import IGRAUpperAir
 
 ############################################################
 #---------------------     PYSONDE     ---------------------#
@@ -55,8 +58,8 @@ class PySonde:
     ### Constructor Method
     ### Inputs:
     ###  fpath, string, file path to sounding. In the case of the web service, this is the station identifier
-    ###  sformat, string, options are: "NWS", "CSWR", "EOL", "WEB" see ReadMe for full breakdown
-    ###  date, optional, required datetime object for Siphon web service sounding. (UTC)
+    ###  sformat, string, some options are: "NWS", "CSWR", "EOL", "IGRA2" see ReadMe for full breakdown
+    ###  date, optional, required datetime object for Siphon web service sounding (WYOWEB, IGRA2). (UTC)
     ###
     ### Outputs:
     ###  None
@@ -90,6 +93,9 @@ class PySonde:
         elif (self.sformat == "CSWR"): #CSWR sounding
             self.read_cswr()
 
+        elif (self.sformat == "UAH"): # UAH UPSTORM format
+            self.read_uah()
+
         elif (self.sformat == "WYO"): #University of Wyoming sounding
             self.read_wyoming()
 
@@ -104,25 +110,28 @@ class PySonde:
 
         elif (self.sformat == "CSV"):
             self.read_csv()
+            
+        elif (self.sformat == "IGRA2"): # IGRA2 online archive
+            self.read_igra2(date)
 
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
 
-        #Add potential temperature to the sounding
+        # Add potential temperature to the sounding
         unitless = self.strip_units()
         self.sounding["pot_temp"] = (at.pot_temp(unitless["pres"]*100.0,
             unitless["temp"]+273.15)-273.15)*self.sounding_units["pot_temp"]
 
-        #Add mixing ratio to the sounding
+        # Add mixing ratio to the sounding
         if ((self.sformat != "PSF") and (self.sformat != "CSV")): #These already contains mixing ratio
             e = at.sat_vaporpres(unitless["dewp"]+273.15)
             p = unitless["pres"]
             self.sounding["mixr"] = at.etow(p*100.0,e)*1000.0*self.sounding_units["mixr"]
 
-        #Calculate planetary boundary layer height
+        # Calculate planetary boundary layer height
         self.calculate_pblh()
 
-        #Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
+        # Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
         self.calculate_basic_thermo()
 
         #Returning
@@ -1125,7 +1134,7 @@ class PySonde:
         fn = open(self.fpath)
         for line in fn:
 
-            #First check if w
+            #First check if in header
             if header:
                 if ("Release Site" in line):
                     self.release_site = line.split()[4]
@@ -1232,6 +1241,74 @@ class PySonde:
         fn.close()
 
         #Returning
+        return
+    
+    ### Method read in soundings that are in the UAH UPSTORM group format
+    def read_uah(self):
+    
+        # Create a dictionary to hold the sounding
+        keys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
+        self.sounding = {}
+        for k in keys:
+            self.sounding[k] = []
+
+        # Read the file
+        fn = open(self.fpath)
+        lines = [line for line in fn]
+        
+        # Pull the header information
+        header = lines[1].strip("#").split(",")
+        loc = lines[3].split(",")
+        self.release_site = header[2]+", "+header[3]
+        self.release_time = datetime.strptime(header[0].strip()+header[1].strip(), "%Y%m%d%H%M UTC")
+        self.release_lon = float(loc[0])*mu.deg
+        self.release_lat = float(loc[1])*mu.deg
+        self.release_elv = float(header[4].strip()[:-1])*mu.meter
+        
+        # Read in the data
+        wspd = []
+        wdir = []
+        for line in lines[3:]:
+
+            # Check for end of file
+            if ("END" in line):
+                break
+
+            # Split line into columns
+            dummy = line.split(",")
+            print(dummy)
+            
+            # Pull data
+            self.sounding["time"].append((datetime.strptime("{}{}".format(header[0].strip(), dummy[2].strip()), "%Y%m%d%H:%M:%S")-
+                self.release_time).total_seconds())
+            self.sounding["lon"].append(dummy[0])
+            self.sounding["lat"].append(dummy[1])
+            self.sounding["alt"].append(dummy[3])
+            self.sounding["pres"].append(dummy[4])
+            self.sounding["temp"].append(dummy[5])
+            self.sounding["dewp"].append(dummy[7])
+            wspd.append(dummy[8])
+            wdir.append(dummy[9].strip())
+
+        # Once the data has been read in, convert everything to numpy arrays and attach units
+        for k in keys:
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+
+        # Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
+        # Compute wind speed components in m/s
+        wspd = numpy.array(wspd, dtype="float")*0.514
+        wdir = numpy.array(wdir, dtype="float")
+
+        self.sounding["uwind"] = wspd*numpy.cos((270-wdir)*numpy.pi/180.0)*self.sounding_units["uwind"]
+        self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)*self.sounding_units["vwind"]
+
+        # Close the sounding object
+        fn.close()
+
+        # Returning
         return
 
     ### Method to pull Univ. of Wyoming Sounding from internet with Siphon
@@ -1412,6 +1489,41 @@ class PySonde:
         wdir = numpy.array(wdir, dtype="float")
         self.sounding["uwind"] = (numpy.array(wspd*numpy.cos((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["uwind"])
         self.sounding["vwind"] = (numpy.array(wspd*numpy.sin((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["vwind"])
+
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+
+        #Returning
+        return
+
+    ### Method to pull IGRA2 Sounding from internet with Siphon
+    ### Input, date, datetime object, date for which to pull sounding
+    ### Written by Therese Parks, UAH
+    def read_igra2(self, date):
+
+        #Pull down the sounding
+        sounding, header = IGRAUpperAir.request_data(date, self.fpath)
+        
+        #Convert sounding to proper data format and attach to PySonde object
+        self.release_time = datetime.utcfromtimestamp(header["release_time"].values[0].tolist()/1e9)
+        self.release_site = header["site_id"].values[0]
+        self.release_lat = header["latitude"].values[0]*mu(header.units["latitude"]).to(mu.deg)
+        self.release_lon = header["longitude"].values[0]*mu(header.units["longitude"]).to(mu.deg)
+        self.release_elv = sounding["height"].values[0]*mu(sounding.units["height"]).to(mu.meter)
+
+        s1keys = ["pres", "temp", "dewp", "uwind", "vwind", "alt"]
+        s2keys = ["lon", "lat"]
+        sounding_keys = ["pressure", "temperature", "dewpoint", "u_wind", "v_wind", "height"]
+        header_keys = ["longitude", "latitude"]
+        for sk, soundk in zip(s1keys, sounding_keys):
+            self.sounding[sk] = sounding[soundk].values*mu(sounding.units[soundk]).to(self.sounding_units[sk])
+
+        for sk, headk in zip(s2keys, header_keys):
+          self.sounding[sk] = header[headk].values*mu(header.units[headk]).to(self.sounding_units[sk])
+
+        #Fill in time array with Nans
+        self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
