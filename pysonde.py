@@ -11,7 +11,7 @@
 ### The object only supports one sounding per file. If more are present, only the first
 ### will be read in, if the reader doesn't break.
 ###
-### Written by Christopher Phillips, Therese Parks
+### Written by Christopher Phillips, Therese Parkes
 ### University of Alabama in Huntsville, June 2020
 ###
 ### Currently supports:
@@ -1499,7 +1499,7 @@ class PySonde:
 
     ### Method to pull IGRA2 Sounding from internet with Siphon
     ### Input, date, datetime object, date for which to pull sounding
-    ### Written by Therese Parks, UAH
+    ### Written by Therese Parkes, UAH
     def read_igra2(self, date):
 
         #Pull down the sounding
