@@ -11,7 +11,8 @@ The object only supports one sounding per file. If more are present, the reader 
 the output at your own risk.
 
 If this code is useful in a research project, please contact 
-Christopher Phillips and proivde an acknolwedgement in any publications.
+Christopher Phillips and provide an acknolwedgement in any publications.
+If the software is a key part of the analysis, please consider offering co-authorship.
 
 Any questions or suggestions should be directed to Christopher Phillips at chris.phillips@uah.edu
 
