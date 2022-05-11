@@ -1505,8 +1505,13 @@ class PySonde:
         #Pull down the sounding
         sounding, header = IGRAUpperAir.request_data(date, self.fpath)
         
+        # Pull pressure from the sounding dataset
+        # Need this to mask any extraneous rows
+        pres = sounding['pressure']
+        mask = numpy.isfinite(pres)
+        
         #Convert sounding to proper data format and attach to PySonde object
-        self.release_time = datetime.utcfromtimestamp(header["release_time"].values[0].tolist()/1e9)
+        self.release_time = date
         self.release_site = header["site_id"].values[0]
         self.release_lat = header["latitude"].values[0]*mu(header.units["latitude"]).to(mu.deg)
         self.release_lon = header["longitude"].values[0]*mu(header.units["longitude"]).to(mu.deg)
@@ -1517,7 +1522,7 @@ class PySonde:
         sounding_keys = ["pressure", "temperature", "dewpoint", "u_wind", "v_wind", "height"]
         header_keys = ["longitude", "latitude"]
         for sk, soundk in zip(s1keys, sounding_keys):
-            self.sounding[sk] = sounding[soundk].values*mu(sounding.units[soundk]).to(self.sounding_units[sk])
+            self.sounding[sk] = sounding[soundk].values[mask]*mu(sounding.units[soundk]).to(self.sounding_units[sk])
 
         for sk, headk in zip(s2keys, header_keys):
           self.sounding[sk] = header[headk].values*mu(header.units[headk]).to(self.sounding_units[sk])
