@@ -191,17 +191,28 @@ class PySonde:
         #Returning
         return
 
-    #Method to calculate Cn2 along the sounding profile
-    #Cn2 is commonly used to quantify the effects of atmospheric turbulence
-    #on scinitallation of light.
-    #Using the equations in Fiorino and Meier 2016
-    #"Improving the Fiedelity of the Tatarskii Cn2 Calculation with Inclusion
-    #of Pressure Perturbations"
-    #Note that Cn2 is returned as log10(Cn2) so no units are associated natively.
-    #Units are log10(m^(-2/3))
-    #Outputs,
-    # logCn2, array of floats, log10 of Cn2
-    def calculate_Cn2(self):
+    # Method to calculate Cn2 along the sounding profile
+    # Cn2 is commonly used to quantify the effects of atmospheric turbulence
+    # on scintillation of light.
+    #  Two methods are offered:
+    #    "fiorino"
+    #    Using the equations in Fiorino and Meier 2016
+    #    "Improving the Fiedelity of the Tatarskii Cn2 Calculation with Inclusion
+    #    of Pressure Perturbations"
+    #  and
+    #    "direct"
+    #    Computing n directly from the sounding variables to calculate
+    #    the structure constant
+    # The direct method requires high resolution sounding data, dz <~ 25 m
+    # and may not be applicable for conditions were the sounding is not representative
+    # of the surrounding volume. I.e., it is assumed that the local mean environment
+    # is equivalent to the measurement taken by the sounding.
+    # Note that Cn2 is returned as log10(Cn2) so no units are associated natively.
+    # Units are log10(m^(-2/3))
+    # 
+    # Outputs,
+    #  logCn2, array of floats, log10 of Cn2
+    def calculate_Cn2(self, method="fiorino"):
 
         #Assume a value of 150 m for the outer-scale length, L0.
         #This is from Fiorino but will be updated to real calculations.
@@ -217,39 +228,62 @@ class PySonde:
         sounding["mixr"] /= 1000.0
         sounding["pot_temp"] += 273.15
 
-        #Compute virtual temperature and virtula potential temperature
-        vtemp = at.virt_temp(sounding["temp"], sounding["mixr"])
-        thetaV = sounding["pot_temp"]*(1.0+0.61*sounding["mixr"])
+        # Choose method
+        if (method.lower() == "fiorino"):
 
-        #Compute vapor pressure (in hPa)
-        ev = sounding["mixr"]*sounding["pres"]/(at.RD/at.RV+sounding["mixr"])/100.0
+            #Compute virtual temperature and virtual potential temperature
+            vtemp = at.virt_temp(sounding["temp"], sounding["mixr"])
+            thetaV = sounding["pot_temp"]*(1.0+0.61*sounding["mixr"])
 
-        #Compute perturabtion pressure (in hPa)
-        #Perturbations are departures from hydrostaty
-        pp = sounding["pres"]/100.0-self.calculate_pres(units=False)
+            #Compute vapor pressure (in hPa)
+            ev = sounding["mixr"]*sounding["pres"]/(at.RD/at.RV+sounding["mixr"])/100.0
 
-        #Compute necessary atmospheric gradients
-        dTdz = numpy.gradient(sounding["temp"], sounding["alt"])
-        dTHvdz = numpy.gradient(thetaV, sounding["alt"])
-        dTHdz = numpy.gradient(sounding["pot_temp"], sounding["alt"])
-        dUdz = numpy.gradient(sounding["uwind"], sounding["alt"])
-        dVdz = numpy.gradient(sounding["vwind"], sounding["alt"])
-        dEvdz = numpy.gradient(ev, sounding["alt"])
-        dPdz = numpy.gradient(pp, sounding["alt"])
+            #Compute perturabtion pressure (in hPa)
+            #Perturbations are departures from hydrostaty
+            pp = sounding["pres"]/100.0-self.calculate_pres(units=False)
 
-        #Compute Richardson number
-        Ri = at.G/vtemp*dTHvdz/(dUdz**2+dVdz**2)
+            #Compute necessary atmospheric gradients
+            dTdz = numpy.gradient(sounding["temp"], sounding["alt"])
+            dTHvdz = numpy.gradient(thetaV, sounding["alt"])
+            dTHdz = numpy.gradient(sounding["pot_temp"], sounding["alt"])
+            dUdz = numpy.gradient(sounding["uwind"], sounding["alt"])
+            dVdz = numpy.gradient(sounding["vwind"], sounding["alt"])
+            dEvdz = numpy.gradient(ev, sounding["alt"])
+            dPdz = numpy.gradient(pp, sounding["alt"])
 
-        #Compute eddy diffusivity ratio (based on Fiorino and Meier 2016)
-        khkm = numpy.where(Ri <= 1.0, 1.0/(6.873*Ri+(1.0/1.0+6.873*Ri)), Ri/7.0)
-        khkm = numpy.where(Ri < 0.01, numpy.nan, khkm)
+            #Compute Richardson number
+            Ri = at.G/vtemp*dTHvdz/(dUdz**2+dVdz**2)
 
-        #Cn2 expanding dn/dz in terms of potental temperature and vapor pressure, and pressure pert.
-        #Fiorino and Meier 2016 (Optics InfoBase Conference Papers)
-        dndT = -1*(10**(-6)) * ((79.0*sounding["pres"]/100.0/sounding["temp"]**2) + 9600*ev/sounding["temp"]**3)
-        dndev = 10**(-6)*4800.0/sounding["temp"]**2
-        dndp = 10**(-6)*79.0/sounding["temp"]
-        Cn2 = 2.8**2*khkm*(L0**(4.0/3.0))*(dndT*dTHdz+dndp*dPdz+dndev*dEvdz)**2
+            #Compute eddy diffusivity ratio (based on Fiorino and Meier 2016)
+            khkm = numpy.where(Ri <= 1.0, 1.0/(6.873*Ri+(1.0/(1.0+6.873*Ri))), 1/(7.0*Ri))
+            khkm = numpy.where(Ri < 0.01, 1.0, khkm)
+
+            #Cn2 expanding dn/dz in terms of potental temperature and vapor pressure, and pressure pert.
+            #Fiorino and Meier 2016 (Optics InfoBase Conference Papers)
+            dndT = -1*(10**(-6)) * ((79.0*sounding["pres"]/100.0/sounding["temp"]**2) + 9600*ev/sounding["temp"]**3)
+            dndev = 10**(-6)*4800.0/sounding["temp"]**2
+            dndp = 10**(-6)*79.0/sounding["temp"]
+            Cn2 = 2.8**2*khkm*(L0**(4.0/3.0))*(dndT*dTHdz+dndp*dPdz+dndev*dEvdz)**2
+
+        elif (method.lower() == "direct"): # Follows methods of Muchinski et al. (1999; Radio Science)
+        
+            # Compute the water vapor pressure contribution
+            q = sounding["mixr"]/(1+sounding["mixr"])
+            pw = 1.608*q*sounding["pres"]
+        
+            # Compute index of refraction
+            n = (7.76e-7)*sounding["pres"]/sounding["pot_temp"] + (3.73e-3)*pw/(sounding["pot_temp"]**2)
+        
+            # Compute Cn2
+            Cn2 = ((n[1:]-n[:-1])**2)/((sounding["alt"][1:]-sounding["alt"][:-1])**(2.0/3.0))
+            
+            # Interpolate back to sounding levels
+            Cn2_z = (sounding["alt"][1:]+sounding["alt"][:-1])/2.0
+            Cn2 = numpy.interp(sounding["alt"], Cn2_z, Cn2)
+        
+        else:
+        
+            raise ValueError("{} is not valid value for 'method'. Use 'fiorino' or 'direct'.".format(method))
 
         #Replace infinities with NaNs
         Cn2[~numpy.isfinite(Cn2)] = numpy.nan
