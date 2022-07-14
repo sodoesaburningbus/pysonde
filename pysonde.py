@@ -263,7 +263,7 @@ class PySonde:
             dndT = -1*(10**(-6)) * ((79.0*sounding["pres"]/100.0/sounding["temp"]**2) + 9600*ev/sounding["temp"]**3)
             dndev = 10**(-6)*4800.0/sounding["temp"]**2
             dndp = 10**(-6)*79.0/sounding["temp"]
-            Cn2 = 2.8**2*khkm*(L0**(4.0/3.0))*(dndT*dTHdz+dndp*dPdz+dndev*dEvdz)**2
+            Cn2 = 2.8*khkm*(L0**(4.0/3.0))*(dndT*dTHdz+dndp*dPdz+dndev*dEvdz)**2
 
         elif (method.lower() == "direct"): # Follows methods of Muchinski et al. (1999; Radio Science)
         
