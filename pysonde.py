@@ -18,6 +18,7 @@
 ###  NWS - NWS high density soundings
 ###  CSWR - Center for Severe Weather Research L2 soundings
 ###  EOL - National Center for Atmospheric Research - Earth Observing Laboratory soundings
+###  HRRR - High Resolution Rapid Refresh analysis from AWS
 ###  UAH - University of Alabama in Huntsville UPSTORM group soundings
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
@@ -39,6 +40,7 @@
 ### Importing required modules
 import pysonde.atmos_math as am
 import pysonde.atmos_thermo as at
+import pysonde.hrrr_funcs as hf
 from datetime import datetime
 from datetime import timedelta
 import matplotlib.pyplot as pp
@@ -47,8 +49,12 @@ import metpy.calc as mc
 from metpy.plots import SkewT
 import netCDF4 as nc
 import numpy
+import os
+import pygrib
 from siphon.simplewebservice.wyoming import WyomingUpperAir
 from siphon.simplewebservice.igra2 import IGRAUpperAir
+import siphon.http_util as shu
+import urllib.request as ur
 
 ############################################################
 #---------------------     PYSONDE     ---------------------#
@@ -59,11 +65,12 @@ class PySonde:
     ### Inputs:
     ###  fpath, string, file path to sounding. In the case of the web service, this is the station identifier
     ###  sformat, string, some options are: "NWS", "CSWR", "EOL", "IGRA2" see ReadMe for full breakdown
-    ###  date, optional, required datetime object for Siphon web service sounding (WYOWEB, IGRA2). (UTC)
+    ###  date, optional, required datetime object for web service sounding (WYOWEB, IGRA2, HRRR). (UTC)
+    ###  point, optional, tuple of floats, (lon, lat) for use with model analysis soundings such as HRRR.
     ###
     ### Outputs:
     ###  None
-    def __init__(self, fpath, sformat, date=None):
+    def __init__(self, fpath, sformat, date=None, point=None):
 
         #First attach file path, format, and units flag to object
         self.fpath = fpath
@@ -84,25 +91,28 @@ class PySonde:
             self.sounding[k] = []
 
         #Now read in the sounding based on it's format
-        if (self.sformat == "NWS"): #NWS sounding
+        if (self.sformat == "NWS"): # NWS sounding
             self.read_nws()
 
-        elif (self.sformat == "EOL"): #NCAR-EOL sounding
+        elif (self.sformat == "EOL"): # NCAR-EOL sounding
             self.read_eol()
 
-        elif (self.sformat == "CSWR"): #CSWR sounding
+        elif (self.sformat == "HRRR"): # HRRR Analysis
+            self.read_hrrr(date, point, fpath=fpath)
+
+        elif (self.sformat == "CSWR"): # CSWR sounding
             self.read_cswr()
 
         elif (self.sformat == "UAH"): # UAH UPSTORM format
             self.read_uah()
 
-        elif (self.sformat == "WYO"): #University of Wyoming sounding
+        elif (self.sformat == "WYO"): # University of Wyoming sounding
             self.read_wyoming()
 
-        elif (self.sformat == "WEB"): #Pull sounding from internet
+        elif (self.sformat == "WEB"): # Pull sounding from internet
             self.read_web(date)
 
-        elif (self.sformat == "WRF"): #WRF SCM input sounding
+        elif (self.sformat == "WRF"): # WRF SCM input sounding
             self.read_wrfscm()
 
         elif (self.sformat == "PSF"):
@@ -1150,6 +1160,66 @@ class PySonde:
             self.sounding["alt"] += self.release_elv
 
         #Returning
+        return
+
+    ### Method to read HRRR soundings (makes use of the AWS archive)
+    ### Inputs:
+    ###   date, datetime object for which to pull the sounding
+    ###   loc, tuple of floats, (lon, lat). The location for which to pull the sounding.
+    ###   fpath, optional, string, file path to a HRRR file.
+    def read_hrrr(self, date, loc, fpath="hrrr.grib2"):
+            
+        # Try to open HRRR file, if that fails, download a new one
+        try:
+            grib = pygrib.open(fpath)
+        except:
+        
+            # The internet location of the HRRR data
+            url_base = "https://noaa-hrrr-bdp-pds.s3.amazonaws.com/"
+            hrrr_url = url_base + "hrrr.{}/conus/hrrr.t{:02d}z.wrfprsf00.grib2".format(
+            date.strftime("%Y%m%d"), date.hour)
+        
+            # Download the HRRR file
+            ur.urlretrieve(hrrr_url, "hrrr.grib2")
+            grib = pygrib.open("hrrr.grib2")
+        
+        # Extract the sounding
+        self.sounding, self.release_elv = hf.get_sounding(loc, grib)
+        
+        # Adjust units
+        self.sounding["temp"] -= 273.15
+        self.sounding["dewp"] -= 273.15
+        
+        # Add header data
+        self.release_time = date
+        self.release_site = "{:.2f} Lon {:.2f} Lat".format(loc[0], loc[1])
+        self.release_lon = loc[0]*mu.deg
+        self.release_lat = loc[1]*mu.deg
+        self.release_elv = self.release_elv*mu.meter
+        
+        # Add missing fields to the sounding
+        self.sounding["time"] = numpy.zeros(self.sounding["temp"].shape)
+        self.sounding["lon"] = numpy.ones(self.sounding["temp"].shape)*loc[0]
+        self.sounding["lat"] = numpy.ones(self.sounding["temp"].shape)*loc[1]
+        
+        # Add units to the variables
+        for k in ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]:
+            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+        
+        # Close the grib file
+        grib.close()
+        
+        # Delete the downloaded file
+        try:
+            os.system("rm hrrr.grib2")
+        except:
+            print("Warning: Unable to remove hrrr.grib2 temporary file.")
+        
+        #Ensure that heights are AMSL and not AGL
+        if (self.sounding["alt"][0] < self.release_elv):
+            self.sounding["alt"] += self.release_elv
+        
+        # Exit the reader
         return
 
     ### Method to read NWS soundings
