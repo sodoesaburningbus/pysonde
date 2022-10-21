@@ -68,7 +68,7 @@ def get_point(point, grib):
 def get_sounding(point, grib):
 
     #Variable name list
-    var_names = ["Temperature", "U component of wind", "V component of wind", "Relative humidity", "Geopotential height"]
+    var_names = ["Temperature", "U component of wind", "V component of wind", "Relative humidity", "Geopotential Height"]
     dict_keys = ["temp", "uwind", "vwind", "dewp", "alt"]
 
     #Retrieve grid indices
