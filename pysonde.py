@@ -158,8 +158,11 @@ class PySonde:
                 break
 
         #Precipitable Water
-        self.pw = mc.precipitable_water(self.sounding["pres"], self.sounding["dewp"])
-
+        try: # backwards compatibility for older versions of metpy
+            self.pw = mc.precipitable_water(self.sounding["pres"], self.sounding["dewp"])
+        except:
+            self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
+            
         #Lifting condensation level
         self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][ind], self.sounding["temp"][ind],
             self.sounding["dewp"][ind])
