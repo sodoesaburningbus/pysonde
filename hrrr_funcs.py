@@ -69,6 +69,7 @@ def get_sounding(point, grib):
 
     #Variable name list
     var_names = ["Temperature", "U component of wind", "V component of wind", "Relative humidity", "Geopotential Height"]
+    alt_var_names = ["Temperature", "U component of wind", "V component of wind", "Relative humidity", "Geopotential height"]
     dict_keys = ["temp", "uwind", "vwind", "dewp", "alt"]
 
     #Retrieve grid indices
@@ -78,10 +79,13 @@ def get_sounding(point, grib):
     data = {}
 
     #Retrieve messages from files
-    for [vn, dk] in zip(var_names, dict_keys):
+    for [vn, dk, avn] in zip(var_names, dict_keys, alt_var_names):
     
         # Get grib messages for this variable
-        messages = grib.select(name=vn, typeOfLevel="isobaricInhPa")
+        try:
+            messages = grib.select(name=vn, typeOfLevel="isobaricInhPa")
+        except:
+            messages = grib.select(name=avn, typeOfLevel="isobaricInhPa")
 
         #Loop over time and layers
         data[dk] = []
