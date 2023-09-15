@@ -1,9 +1,6 @@
 # This module contains mathematical functions and constants
 # that are used in the PySonde package.
 # Written by Christopher Phillips
-# Source materials are:
-# Grant Petty's "A First Course in Atmospheric Thermodynamics" 1st Ed.
-# Dennis Hartmann's "Global Physical Climatology" 1994 Ed.
 #
 # Requires:
 #    Python 3+

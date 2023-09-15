@@ -41,6 +41,7 @@
 import pysonde.atmos_math as am
 import pysonde.atmos_thermo as at
 import pysonde.hrrr_funcs as hf
+import pysonde.severewx as swx
 from datetime import datetime
 from datetime import timedelta
 import matplotlib.pyplot as pp
@@ -184,6 +185,7 @@ class PySonde:
             self.lfc_alt = (self.sounding["alt"][inds][pos])[i]
         except Exception as err:
             print("WARNING: No LFC because:\n{}".format(err))
+            print("Likely due to atmospheric stability.")
             self.lfc_pres = numpy.nan
             self.lfc_temp = numpy.nan
             self.lfc_alt = numpy.nan
@@ -191,15 +193,21 @@ class PySonde:
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
         try:
 
-            #Surface-based CAPE and CIN
+            # Surface-based CAPE and CIN
             self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"][inds], self.sounding["temp"][inds],
                 self.sounding["dewp"][inds], self.parcel_path)
+            
+            # Most unstable CAPE and CIN
+            self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'], self.sounding['temp'],
+                self.sounding['dewp'])
 
         #Do this when parcel path fails to converge
         except Exception as e:
             print("WARNING: No CAPE because:\n{}.".format(e))
             self.sfc_cape = numpy.nan
             self.sfc_cin = numpy.nan
+            self.mu_cape = numpy.nan
+            self.mu_cin = numpy.nan
 
         #Returning
         return
@@ -520,14 +528,35 @@ class PySonde:
             self.sounding["alt"][indb2], self.sounding["alt"][indt2])
         return z2-z1
 
+    # Method to calculate wind shear over a layer
+    # Inputs:
+    #  bottom, float, pressure or height level of layer bottom with units attached
+    #  top, float, pressure or height of level of layer top with units attached
+    #
+    # Outputs:
+    #  ushear, float, the u component of the wind shear in m/s
+    #  vshear, float, the v component of the wind shear in m/s
+    def calculate_shear(self, bottom, top):
+
+        # Determine if pressure or altitude
+
+        # Locate desired level (make a call to extract level)
+
+        # Compute the shear
+
+        # Return
+        return ushear, vshear
+
     #Method to extract sounding variables at a single level
     #This method will interpolate between the two nearest levels.
     #Inputs:
-    # level, float, pressure level (hPa if no unit attached) for which to pull values
+    # level, float, pressure or height level for which to pull values
     #Outputs
     # data, dictionary keyed with sounding variables, contains values at
     #       requested level
     def extract_level(self, level):
+
+        # 
 
         #Force level unit to same as sounding
         try:
@@ -697,8 +726,9 @@ class PySonde:
         skewt = SkewT(fig, rotation=45)
 
         #Now set the limits
+        pmask = self.sounding['pres'] >= 100.0*mu.hPa
         skewt.ax.set_xlim(-40, 60)
-        skewt.ax.set_ylim(1000, 100)
+        skewt.ax.set_ylim(self.sounding['pres'][0], 100.0*mu.hPa)
 
         #Add the adiabats, etc
         skewt.plot_dry_adiabats(t0=numpy.arange(-40, 200, 10)*self.sounding_units["temp"])
@@ -1383,7 +1413,6 @@ class PySonde:
 
             # Split line into columns
             dummy = line.split(",")
-            print(dummy)
             
             # Pull data
             self.sounding["time"].append((datetime.strptime("{}{}".format(header[0].strip(), dummy[2].strip()), "%Y%m%d%H:%M:%S")-
@@ -1614,8 +1643,8 @@ class PySonde:
         
         # Pull pressure from the sounding dataset
         # Need this to mask any extraneous rows
-        pres = sounding['pressure']
-        mask = numpy.isfinite(pres)
+        dewp = sounding['dewpoint']
+        mask = numpy.isfinite(dewp)
         
         #Convert sounding to proper data format and attach to PySonde object
         self.release_time = date
@@ -1628,11 +1657,23 @@ class PySonde:
         s2keys = ["lon", "lat"]
         sounding_keys = ["pressure", "temperature", "dewpoint", "u_wind", "v_wind", "height"]
         header_keys = ["longitude", "latitude"]
+        
+        # Pull in profile
         for sk, soundk in zip(s1keys, sounding_keys):
             self.sounding[sk] = sounding[soundk].values[mask]*mu(sounding.units[soundk]).to(self.sounding_units[sk])
 
-        for sk, headk in zip(s2keys, header_keys):
-          self.sounding[sk] = header[headk].values*mu(header.units[headk]).to(self.sounding_units[sk])
+        # Handle lat/lons
+        lons = header["longitude"].values
+        lats = header["latitude"].values
+        if lats.size < numpy.sum(mask):
+            lons = (numpy.ones(numpy.sum(mask))*lons)*mu(header.units["longitude"]).to(self.sounding_units["lon"])
+            lats = (numpy.ones(numpy.sum(mask))*lats)*mu(header.units["latitude"]).to(self.sounding_units["lat"])
+        else:
+            lons = lons[mask]*mu(header.units["longitude"]).to(self.sounding_units["lon"])
+            lats = lats[mask]*mu(header.units["longitude"]).to(self.sounding_units["lon"])
+
+        self.sounding['lon'] = lons
+        self.sounding['lat'] = lats
 
         #Fill in time array with Nans
         self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
