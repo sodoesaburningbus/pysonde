@@ -26,6 +26,8 @@ Matplotlib
 MetPy 1+
 NetCDF4
 Numpy
+PyGrib
+Siphon
 
 ------------------------------------INSTALLATION------------------------------------
 

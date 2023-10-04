@@ -54,11 +54,8 @@ def get_stp(self):
     psrh, nsrh, srh = get_esrh(self, self.release_elv, 1000*units('m'))
 
     # Get the 0-6 km shear
-    ind6km = np.argmin(((self.sounding['alt']-self.release_elv)-6000.0*units('m'))**2)
-    shear = np.sqrt(
-        (self.sounding['uwind'][ind6km]-self.sounding['uwind'][0])**2+
-        (self.sounding['vwind'][ind6km]-self.sounding['vwind'][0])**2
-    )
+    ushear6, vshear6 = self.calculate_shear(0*self.units.m, 6000*self.units.m)
+    shear = np.sqrt(ushear6**2+vshear6**2)
 
     # Clip shear to bounds
     if (shear < 12.5*units('m/s')):
@@ -67,7 +64,7 @@ def get_stp(self):
         shear = 30*units('m/s')
 
     #Pull the LCL height
-    lcl = min(self.lcl_alt, 2000.0*units('m'))
+    lcl = min(self.lcl_alt-self.release_elv, 2000.0*units('m'))
     lcl = max(lcl, 1000.0*units('m'))
 
     stp = self.sfc_cape/(1500*units('J/kg'))*(2000.0*units('m')-lcl)/(1000.0*units('m'))*srh/(150*units('m^2/s^2'))*shear/(20*units('m/s'))
@@ -184,15 +181,31 @@ def get_effective_layer_indices(self):
 def get_wbi(self):
 
     # Compute 0-1 km and 0-6 km shear
+    ushear1, vshear1 = self.calculate_shear(0*self.units.m, 1000*self.units.m)
+    ushear6, vshear6 = self.calculate_shear(0*self.units.m, 6000*self.units.m)
+
+    # Ensure uniture
+    ushear1 = ushear1.to(self.units.meter/self.units.second)
+    vshear1 = vshear1.to(self.units.meter/self.units.second)
+    ushear6 = ushear6.to(self.units.meter/self.units.second)
+    vshear6 = vshear6.to(self.units.meter/self.units.second)
+
+    print(np.sqrt(ushear1**2+vshear1**2).to(self.units.kt))
+    print(np.sqrt(ushear6**2+vshear6**2).to(self.units.kt))
 
     # Compute shear angle
-    alpha1km= np.arctan(vshear1km/ushear1km)
-    alpha6km= np.arctan(vshear6km/ushear6km)
+    alpha1km= np.arctan(vshear1/ushear1)
+    alpha6km= np.arctan(vshear6/ushear6)
     alpha = alpha6km-alpha1km
 
     # Clean up CIN and CAPE to ensure they are on the proper bounds
+    mu_cape = max(0, self.mu_cape)
+    if (self.mu_cin < 0):
+        mu_cin = self.mu_cin
+    else:
+        mu_cin = -1*self.mu_cin
 
     # Compute the WBI
-    cape/500.0*np.sqrt(ushear1km**2+vshear1km**2)*(np.sin(alpha)**2)*(1.05**cin)
+    wbi = (mu_cape/(500.0*(self.units.J/self.units.kg)))*np.sqrt(ushear1**2+vshear1**2)/(self.units.meter/self.units.second)*(np.sin(alpha)**2)*(1.05**(mu_cin/(self.units.J/self.units.kg)))
 
     return wbi
