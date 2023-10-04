@@ -9,10 +9,10 @@ from pysonde.pysonde import PySonde
 import matplotlib.pyplot as pp
 
 #Location of test sounding
-sounding_path = "./example_sounding_uah.txt"
+sounding_path = "./example_sounding_nws.txt"
 
 #Create sounding object
-sonde = PySonde(sounding_path, "UAH")
+sonde = PySonde(sounding_path, "NWS")
 
 #Compute Cn2
 cn2 = sonde.calculate_Cn2()

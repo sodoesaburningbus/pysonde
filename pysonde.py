@@ -22,7 +22,7 @@
 ###  UAH - University of Alabama in Huntsville UPSTORM group soundings
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
-###  WYOWEB - University of Wyoming sounding online archive. (These are pulled from online.)
+###  WEB - University of Wyoming sounding online archive. (These are pulled from online.)
 ###  IGRA2 - The IGRA2 online sounding archive. (These are pulled from online.)
 ###  PSF - PySonde Sounding Format, a netCDF4 format more fully described in the documentation.
 ###  CSV - CSV files originally outputted by PySonde
@@ -538,11 +538,13 @@ class PySonde:
     #  vshear, float, the v component of the wind shear in m/s
     def calculate_shear(self, bottom, top):
 
-        # Determine if pressure or altitude
-
         # Locate desired level (make a call to extract level)
+        data1 = self.extract_level(bottom)
+        data2 = self.extract_level(top)
 
         # Compute the shear
+        ushear = data2['uwind']-data1['uwind']
+        vshear = data2['vwind']-data1['vwind']
 
         # Return
         return ushear, vshear
@@ -550,13 +552,46 @@ class PySonde:
     #Method to extract sounding variables at a single level
     #This method will interpolate between the two nearest levels.
     #Inputs:
-    # level, float, pressure or height level for which to pull values
+    # level, float, pressure or height AGL level for which to pull values
     #Outputs
     # data, dictionary keyed with sounding variables, contains values at
     #       requested level
     def extract_level(self, level):
 
-        # 
+        # Check if unit attached
+        try:
+            level.dimensionality
+        except:
+            raise ValueError('"level" must have a unit attached')
+
+        # If given altitude, convert to a pressure using hypsometric
+        if (level.dimensionality == self.sounding_units['alt'].dimensionality):
+            
+            # Make level AMSL for consistency with the sounding
+            level = level + self.release_elv
+
+            # Bracket height level
+            ind = numpy.argmin((level-self.sounding['alt'])**2)
+            if (self.sounding["alt"][ind] <= level):
+                tind = ind+2
+                bind = ind
+            else:
+                tind = ind
+                bind = ind-2
+
+            # Make sure that the bottom index is not less than 0
+            if (bind < 0):
+                bind = 0
+                tind = 2
+
+            # Compute pressure of that level
+            tbar = am.layer_average(self.sounding["pres"][bind:tind].to(self.units.Pa), self.sounding["temp"][bind:tind].to(self.units.K))
+            a = (-1.0*(at.G*self.units.meter/self.units.second**2)*(level-self.sounding['alt'][bind]))
+            b = ((at.RD)*(self.units.J/self.units.kg/self.units.K)*tbar).to_base_units()
+            c = (a/b).to_base_units()
+
+            level = self.sounding["pres"][bind]*numpy.exp(c.magnitude)
+            
 
         #Force level unit to same as sounding
         try:
@@ -575,6 +610,11 @@ class PySonde:
         elif (self.sounding["pres"][ind] < level):
             tind = ind
             bind = ind-1
+
+        # Make sure that the bottom index is not less than 0
+        if (bind < 0):
+            bind = 0
+            tind = 1
 
         #Perform the interpolations
         for k in self.sounding.keys():
