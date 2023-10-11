@@ -35,7 +35,7 @@
 ### Matplotlib
 ### MetPy 1.0+
 ### NetCDF4
-### Numpy
+### np
 
 ### Importing required modules
 import pysonde.atmos_math as am
@@ -47,15 +47,16 @@ from datetime import timedelta
 import matplotlib.pyplot as pp
 from metpy.units import units as mu
 import metpy.calc as mc
-from metpy.plots import SkewT
+from metpy.plots import SkewT, Hodograph
 import netCDF4 as nc
-import numpy
+import numpy as np
 import os
 import pygrib
 from siphon.simplewebservice.wyoming import WyomingUpperAir
 from siphon.simplewebservice.igra2 import IGRAUpperAir
 import siphon.http_util as shu
 import urllib.request as ur
+import matplotlib.gridspec as gridspec
 
 ############################################################
 #---------------------     PYSONDE     ---------------------#
@@ -155,7 +156,7 @@ class PySonde:
 
         #Find first non-Nan level
         for ind, t in enumerate(self.sounding["dewp"]):
-            if numpy.isfinite(t):
+            if np.isfinite(t):
                 break
 
         #Precipitable Water
@@ -167,11 +168,11 @@ class PySonde:
         #Lifting condensation level
         self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][ind], self.sounding["temp"][ind],
             self.sounding["dewp"][ind])
-        self.lcl_alt = self.sounding["alt"][numpy.nanargmin((self.lcl_pres-self.sounding["pres"])**2)]
+        self.lcl_alt = self.sounding["alt"][np.nanargmin((self.lcl_pres-self.sounding["pres"])**2)]
 
         #Level of free convection
         try:
-            inds = numpy.isfinite(self.sounding["dewp"])
+            inds = np.isfinite(self.sounding["dewp"])
             self.parcel_path = mc.parcel_profile(self.sounding["pres"][inds], self.sounding["temp"][inds][0],
                 self.sounding["dewp"][inds][0])
             pos = (self.parcel_path > self.sounding["temp"][inds])
@@ -186,9 +187,18 @@ class PySonde:
         except Exception as err:
             print("WARNING: No LFC because:\n{}".format(err))
             print("Likely due to atmospheric stability.")
-            self.lfc_pres = numpy.nan
-            self.lfc_temp = numpy.nan
-            self.lfc_alt = numpy.nan
+            self.lfc_pres = np.nan*self.sounding_units['pres']
+            self.lfc_temp = np.nan*self.sounding_units['temp']
+            self.lfc_alt = np.nan*self.sounding_units['alt']
+        
+        #Equilibrium Level:
+        try:
+            self.el_pres, self.el_temp = mc.el(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
+            self.el_alt = self.sounding["alt"][np.nanargmin((self.el_pres-self.sounding["pres"])**2)]
+        except:
+            self.el_pres = np.nan*self.sounding_units['pres']
+            self.el_temp = np.nan*self.sounding_units['temp']
+            self.el_alt = np.nan*self.sounding_units['alt']
 
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
         try:
@@ -201,13 +211,25 @@ class PySonde:
             self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'], self.sounding['temp'],
                 self.sounding['dewp'])
 
+            # Mixed layer CAPE and CIN
+            self.ml_cape, self.ml_cin = mc.mixed_layer_cape_cin(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'])
+
+            #3CAPE and 3CIN
+            hgt = self.sounding['alt'] - self.release_elv
+            km3_ind = np.argmin((hgt.to('km') - 3*mu.km)**2)
+            self.cape3, self.cin3 = mc.mixed_layer_cape_cin(self.sounding['pres'][:km3_ind], self.sounding['temp'][:km3_ind], self.sounding['dewp'][:km3_ind])
+
         #Do this when parcel path fails to converge
         except Exception as e:
             print("WARNING: No CAPE because:\n{}.".format(e))
-            self.sfc_cape = numpy.nan
-            self.sfc_cin = numpy.nan
-            self.mu_cape = numpy.nan
-            self.mu_cin = numpy.nan
+            self.sfc_cape = 0.0
+            self.sfc_cin = 0.0
+            self.mu_cape = 0.0
+            self.mu_cin = 0.0
+            self.ml_cape = 0.0
+            self.ml_cin = 0.0
+            self.CAPE3 = 0.0
+            self.CIN3 = 0.0
 
         #Returning
         return
@@ -264,20 +286,20 @@ class PySonde:
             pp = sounding["pres"]/100.0-self.calculate_pres(units=False)
 
             #Compute necessary atmospheric gradients
-            dTdz = numpy.gradient(sounding["temp"], sounding["alt"])
-            dTHvdz = numpy.gradient(thetaV, sounding["alt"])
-            dTHdz = numpy.gradient(sounding["pot_temp"], sounding["alt"])
-            dUdz = numpy.gradient(sounding["uwind"], sounding["alt"])
-            dVdz = numpy.gradient(sounding["vwind"], sounding["alt"])
-            dEvdz = numpy.gradient(ev, sounding["alt"])
-            dPdz = numpy.gradient(pp, sounding["alt"])
+            dTdz = np.gradient(sounding["temp"], sounding["alt"])
+            dTHvdz = np.gradient(thetaV, sounding["alt"])
+            dTHdz = np.gradient(sounding["pot_temp"], sounding["alt"])
+            dUdz = np.gradient(sounding["uwind"], sounding["alt"])
+            dVdz = np.gradient(sounding["vwind"], sounding["alt"])
+            dEvdz = np.gradient(ev, sounding["alt"])
+            dPdz = np.gradient(pp, sounding["alt"])
 
             #Compute Richardson number
             Ri = at.G/vtemp*dTHvdz/(dUdz**2+dVdz**2)
 
             #Compute eddy diffusivity ratio (based on Fiorino and Meier 2016)
-            khkm = numpy.where(Ri <= 1.0, 1.0/(6.873*Ri+(1.0/(1.0+6.873*Ri))), 1/(7.0*Ri))
-            khkm = numpy.where(Ri < 0.01, 1.0, khkm)
+            khkm = np.where(Ri <= 1.0, 1.0/(6.873*Ri+(1.0/(1.0+6.873*Ri))), 1/(7.0*Ri))
+            khkm = np.where(Ri < 0.01, 1.0, khkm)
 
             #Cn2 expanding dn/dz in terms of potental temperature and vapor pressure, and pressure pert.
             #Fiorino and Meier 2016 (Optics InfoBase Conference Papers)
@@ -300,20 +322,20 @@ class PySonde:
             
             # Interpolate back to sounding levels
             Cn2_z = (sounding["alt"][1:]+sounding["alt"][:-1])/2.0
-            Cn2 = numpy.interp(sounding["alt"], Cn2_z, Cn2)
+            Cn2 = np.interp(sounding["alt"], Cn2_z, Cn2)
         
         else:
         
             raise ValueError("{} is not valid value for 'method'. Use 'fiorino' or 'direct'.".format(method))
 
         #Replace infinities with NaNs
-        Cn2[~numpy.isfinite(Cn2)] = numpy.nan
+        Cn2[~np.isfinite(Cn2)] = np.nan
 
         #Compute logarithmic value
-        logCn2 = numpy.log10(Cn2)
+        logCn2 = np.log10(Cn2)
 
         #Remove unrealistically large values
-        logCn2[logCn2 > 0] = numpy.nan
+        logCn2[logCn2 > 0] = np.nan
 
         #Return Cn2
         return logCn2
@@ -337,7 +359,7 @@ class PySonde:
         vtemp = at.virt_temp(temp, mixr)
 
         #If first element isn't finite, then replace with temperature
-        if (not numpy.isfinite(vtemp[0])):
+        if (not np.isfinite(vtemp[0])):
             vtemp[0] = temp[0]
 
         #Loop across the sounding profile while summing layer thickness
@@ -350,16 +372,16 @@ class PySonde:
             z.append(z[-j]+dz)
 
             #For handling layers with missing data
-            if (not numpy.isfinite(dz)):
+            if (not np.isfinite(dz)):
                 j += 1
             else:
                 j = 1
 
-        #Convert to numpy array and add release elevation
+        #Convert to np array and add release elevation
         if units:
-            gph = numpy.array(z)*self.sounding_units["alt"]+self.release_elv
+            gph = np.array(z)*self.sounding_units["alt"]+self.release_elv
         else:
-            gph = numpy.array(z)+numpy.array(self.release_elv/self.sounding_units["alt"])
+            gph = np.array(z)+np.array(self.release_elv/self.sounding_units["alt"])
 
         return gph
 
@@ -385,12 +407,12 @@ class PySonde:
 
         #Identify the first non-Nan level in the sounding
         for i, ps in enumerate(pres):
-            if numpy.isfinite(ps):
+            if np.isfinite(ps):
                 ind0 = i
                 break
 
         #If first element isn't finite, then replace with temperature
-        if (not numpy.isfinite(vtemp[ind0])):
+        if (not np.isfinite(vtemp[ind0])):
             vtemp[ind0] = temp[ind0]
 
         #Loop across the sounding profile while summing the pressure changes
@@ -399,7 +421,7 @@ class PySonde:
         for i in range(pres.size):
 
             if (i < ind0):
-                p.append(numpy.nan)
+                p.append(np.nan)
                 continue
             elif (i == ind0):
                 p.append(pres[ind0])
@@ -408,19 +430,19 @@ class PySonde:
             #Compute mean layer virtual temperature and layer thickness
             tvbar = am.layer_interp(pres[i-j], pres[i], (pres[i-j]+pres[i])/2.0, vtemp[i-j], vtemp[i])
             dz = sounding["alt"][i]-sounding["alt"][i-j]
-            p.append(p[i-j]*numpy.exp(-(at.G*dz)/(at.RD*tvbar)))
+            p.append(p[i-j]*np.exp(-(at.G*dz)/(at.RD*tvbar)))
 
             #For handling layers with missing data
-            if (not numpy.isfinite(dz)):
+            if (not np.isfinite(dz)):
                 j += 1
             else:
                 j = 1
 
-        #Convert to numpy array and handle units
+        #Convert to np array and handle units
         if units:
-            hpres = numpy.array(p)/100.0*self.sounding_units["pres"]
+            hpres = np.array(p)/100.0*self.sounding_units["pres"]
         else:
-            hpres = numpy.array(p)/100.0
+            hpres = np.array(p)/100.0
 
         return hpres
 
@@ -433,8 +455,8 @@ class PySonde:
         try:
             #Set Surbace based inversion flag to false initially
             self.sbi = False
-            self.sbih = numpy.nan
-            self.sbih_pres = numpy.nan
+            self.sbih = np.nan
+            self.sbih_pres = np.nan
             self.sbih_ind = None
 
             #Strip units from sounding for use with atmos package
@@ -442,11 +464,11 @@ class PySonde:
 
             #Calculate sounding potential temperature, temperature gradient, and height AGL
             height = (sounding["alt"]-sounding["release_elv"]) #Height AGL
-            tgrad = numpy.gradient(sounding["temp"])
+            tgrad = np.gradient(sounding["temp"])
             theta = at.pot_temp(sounding["pres"]*100.0, sounding["temp"]+273.15)
 
             #Locate elevated temperature inversion, call that the PBLH
-            ind_pbl = numpy.where(tgrad > 0.0)[0][0]
+            ind_pbl = np.where(tgrad > 0.0)[0][0]
 
             #If a surface based inversion exists, then look for the top of the inversion
             #Re-calculate the PBLH for the overlying remnant layer
@@ -454,13 +476,13 @@ class PySonde:
 
                 #Handle SBI
                 self.sbi = True
-                ind_sbi = numpy.where(tgrad[ind_pbl:] <= 0.0)[0][0]+ind_pbl
+                ind_sbi = np.where(tgrad[ind_pbl:] <= 0.0)[0][0]+ind_pbl
                 self.sbih = height[ind_sbi]*self.sounding_units["alt"]
                 self.sbih_pres = (sounding["pres"])[ind_sbi]*self.sounding_units["pres"]
                 self.sbih_ind = ind_sbi
 
                 #Re-locate PBL top
-                ind_pbl = numpy.where(tgrad[ind_sbi:] > 0.0)[0][0]+ind_sbi
+                ind_pbl = np.where(tgrad[ind_sbi:] > 0.0)[0][0]+ind_sbi
 
             #If no inversion exists below 600 hPa, then use the mixing method
             if ((sounding["pres"])[ind_pbl] < 600.0):
@@ -469,7 +491,7 @@ class PySonde:
                 ind_pbl = 0
                 ind = 0
                 while (ind_pbl < 2): #To avoid getting stuck at the surface
-                    ind_pbl = numpy.where(theta[ind] < theta)[0][0]
+                    ind_pbl = np.where(theta[ind] < theta)[0][0]
                     ind += 1
 
             #Retreive PBL top height and pressure
@@ -483,8 +505,8 @@ class PySonde:
 
         except Exception as err:
             print("WARNING: PBL top could not be found due to:\n{}".format(err))
-            self.pblh = numpy.nan
-            self.pblh_pres = numpy.nan
+            self.pblh = np.nan
+            self.pblh_pres = np.nan
             self.pblh_ind = None
 
         #Returning
@@ -504,8 +526,8 @@ class PySonde:
         layer2 = layer2.to(self.sounding_units["pres"])
 
         #Locate level in sounding closest to each level
-        ind1 = numpy.argmin((self.sounding["pres"]-layer1)**2)
-        ind2 = numpy.argmin((self.sounding["pres"]-layer2)**2)
+        ind1 = np.argmin((self.sounding["pres"]-layer1)**2)
+        ind2 = np.argmin((self.sounding["pres"]-layer2)**2)
 
         #Bracket the desired levels in the sounding
         if (self.sounding["pres"][ind1] > layer1):
@@ -571,7 +593,7 @@ class PySonde:
             level = level + self.release_elv
 
             # Bracket height level
-            ind = numpy.argmin((level-self.sounding['alt'])**2)
+            ind = np.argmin((level-self.sounding['alt'])**2)
             if (self.sounding["alt"][ind] <= level):
                 tind = ind+2
                 bind = ind
@@ -590,7 +612,7 @@ class PySonde:
             b = ((at.RD)*(self.units.J/self.units.kg/self.units.K)*tbar).to_base_units()
             c = (a/b).to_base_units()
 
-            level = self.sounding["pres"][bind]*numpy.exp(c.magnitude)
+            level = self.sounding["pres"][bind]*np.exp(c.magnitude)
             
 
         #Force level unit to same as sounding
@@ -603,7 +625,7 @@ class PySonde:
         data = {}
 
         #Locate nearest levels that bracket the desired level
-        ind = numpy.nanargmin(abs(self.sounding["pres"]-level))
+        ind = np.nanargmin(abs(self.sounding["pres"]-level))
         if (self.sounding["pres"][ind] >= level):
             tind = ind+1
             bind = ind
@@ -649,10 +671,10 @@ class PySonde:
         jet = {}
 
         #Calculate total wind profile
-        wspd = numpy.sqrt(self.sounding["uwind"]**2+self.sounding["vwind"]**2)
+        wspd = np.sqrt(self.sounding["uwind"]**2+self.sounding["vwind"]**2)
         wdir = (270.0*self.units.degrees-
-            numpy.arctan2(self.sounding["vwind"]/self.sounding_units["vwind"],
-            self.sounding["uwind"]/self.sounding_units["uwind"])*180.0/numpy.pi*
+            np.arctan2(self.sounding["vwind"]/self.sounding_units["vwind"],
+            self.sounding["uwind"]/self.sounding_units["uwind"])*180.0/np.pi*
             self.units.degrees)
 
         #Eliminate all values above 700 hPa
@@ -661,11 +683,11 @@ class PySonde:
         wdir = wdir[mask]
 
         #Locate the maximum wind speed
-        maxind = numpy.argmax(wspd)
+        maxind = np.argmax(wspd)
         wmax = wspd[maxind]
 
         #Locate the minimum above the jet core
-        minind = numpy.argmin(wspd[maxind:])
+        minind = np.argmin(wspd[maxind:])
         wmin = wspd[maxind:][minind]
 
         #Assign the catgeory
@@ -684,11 +706,11 @@ class PySonde:
 
         else: #No LLJ
             jet["category"] = -1
-            jet["alt"] = numpy.nan*self.sounding_units["alt"]
-            jet["pres"] = numpy.nan*self.sounding_units["pres"]
-            jet["wspd"] = numpy.nan*self.sounding_units["uwind"]
-            jet["wdeg"] = numpy.nan*self.units.degrees
-            jet["falloff"] = numpy.nan*self.sounding_units["uwind"]
+            jet["alt"] = np.nan*self.sounding_units["alt"]
+            jet["pres"] = np.nan*self.sounding_units["pres"]
+            jet["wspd"] = np.nan*self.sounding_units["uwind"]
+            jet["wdeg"] = np.nan*self.units.degrees
+            jet["falloff"] = np.nan*self.sounding_units["uwind"]
 
             #Returning if no jet
             return jet
@@ -755,6 +777,410 @@ class PySonde:
         #Returning
         return fig, skewt
 
+    ### Method to plot an advanced sounding
+    ### Includes dozens of calculated variables alongside the advanced Skew-T plot and hodgraph.
+    ### Inputs:
+    ###  nbarbs, optional, integer, spacing between wind barbs
+    ###  llj, optional, boolean, whether to check for a Low-level jet and highlight it. Defaults to False.
+    ###  pblh, optional, boolean, whether to plot the PBLH height. Defaults to False.
+    ###  sbi, optional, boolean, whether to plot the Surface-Based Inversion height. Defaults to False.
+    ###  sonde_table, optional, boolean, whether to plot a text table of PySonde-unique values (LLJ, PBLH, etc.). Defaults to False.
+    ###  save_dir, optional, string path name to the directory you wish to save the resultant plot
+    ###
+    ### Outputs:
+    ###  fig, the pyplot figure object
+    ###  skewt, the MetPy SkewT axis object
+
+    def advanced_skewt(self, nbarbs=None, llj=False, pblh=False, sbi=False, sonde_table = False, save_dir = None):
+
+        #Change default to be better for Skew-T plot:
+        fig = pp.figure(figsize = (15,15), facecolor = 'whitesmoke',constrained_layout=True)
+        gs = gridspec.GridSpec(2, 2)
+        skew = SkewT(fig, rotation=45, subplot=gs[:, 0])
+
+        #Plot the parcel profiles:
+        prof = mc.parcel_profile(self.sounding['pres'], self.sounding['temp'][0], self.sounding['dewp'][0]).to('degC')
+        ml_p, ml_t, ml_td = mc.mixed_parcel(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'], depth=50 * mu.hPa)
+        mu_p, mu_t, mu_td, _ = mc.most_unstable_parcel(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'], depth=50 * mu.hPa)
+        ml_prof = mc.parcel_profile(self.sounding['pres'], ml_t, ml_td).to('degC')
+        mu_prof = mc.parcel_profile(self.sounding['pres'], mu_t, mu_td).to('degC')
+        skew.plot(self.sounding['pres'], ml_prof, color='tab:blue', linewidth = 0.65, linestyle = '--') #ML profile
+        skew.plot(self.sounding['pres'], mu_prof, color = 'maroon', linewidth = 0.65, linestyle = '--') #MU profile
+        skew.plot(self.sounding['pres'], prof, color='black', linewidth=1.15) #SB profile
+
+        #Plot the temp and dewpoint data:
+        skew.plot(self.sounding['pres'], self.sounding['temp'], 'tab:red', linewidth=1.5)
+        skew.plot(self.sounding['pres'], self.sounding['dewp'], 'tab:green', linewidth=1.5)
+
+        #Plot Wind Barbs every 50 hPa:
+        def pressure_interval(p,u,v,upper=100,lower=1000,spacing=50):
+
+            intervals = list(range(upper,lower,spacing))
+
+            ix = []
+            for center in intervals:
+                index = (np.abs(p-center)).argmin()
+                if index not in ix:
+                    ix.append(index)
+
+            return p[ix],u[ix],v[ix]
+
+        p_,u_,v_ = pressure_interval(self.sounding['pres'].m,self.sounding['uwind'].to('kt'),self.sounding['vwind'].to('kt'))
+
+        if (nbarbs == None):
+            skew.plot_barbs(p_,u_,v_, xloc=1.1)
+        else:
+            skew.plot_barbs(self.sounding["pres"][::nbarbs], self.sounding["uwind"].to('kt')[::nbarbs], self.sounding["vwind"].to('kt')[::nbarbs], xloc=1.1)
+
+        #Add special lines to Skew-T plot:
+        skew.plot_dry_adiabats(t0=np.arange(-60, 240, 10) * mu.degC, color='darkorange', linewidth = 0.5)
+        skew.plot_moist_adiabats(color='lightgreen', linewidth = 0.5, linestyle='dotted')
+        skew.plot_mixing_lines(pressure=np.arange(1000, 99, -20) * mu.hPa, color='tab:blue', linewidth = 0.5)
+
+        #Plot lcl, lfc, and el:
+        skew.plot(self.lcl_pres, self.lcl_temp, '_', label='LCL', mew = 2, color = 'black')
+        skew.plot(self.lfc_pres, self.lfc_temp, '_', label='LFC',  mew = 2, color = 'black')
+        skew.plot(self.el_pres, self.el_temp, '_', label='EL', mew = 2, color = 'black')
+        skew.ax.text(self.lcl_temp.m - 5, self.lcl_pres.m +20, 'LCL', fontweight = 'bold')
+        skew.ax.text(self.lfc_temp.m - 5, self.lfc_pres.m +20, 'LFC', fontweight = 'bold')
+        skew.ax.text(self.el_temp.m - 5, self.el_pres.m, 'EL', fontweight = 'bold')
+        skew.ax.text(self.sounding['temp'][0].m - 0, self.sounding['pres'][0].m + 50, f'{self.sounding["temp"][0].m * (9/5) + 32:5.0f}', color = 'tab:red', fontweight = 'bold', fontsize = 8)
+        skew.ax.text(self.sounding['dewp'][0].m - 2, self.sounding['pres'][0].m + 50, f'{self.sounding["dewp"][0].m * (9/5) + 32:5.0f}', color = 'tab:green', fontweight = 'bold', fontsize = 8)
+
+        #Shade CAPE and CIN areas on the Skew-T:
+        skew.ax.fill_betweenx(self.sounding['pres'], self.sounding['temp'], prof, where=self.sounding['pres']>self.lfc_pres, facecolor='lightblue') #ensures fill is only below EL
+        skew.shade_cape(self.sounding['pres'], self.sounding['temp'], prof, color='pink')
+
+        ### Add levels of concern:
+        #Freezing Level:
+        try:
+            fzl_index = np.argmin(np.abs(self.sounding['temp'] - 273.15 * mu.kelvin))
+            fzl_pressure = self.sounding['pres'][fzl_index]
+            skew.plot(fzl_pressure, self.sounding['temp'][fzl_index], '_', label='FRZ', mew = 2, color = 'dodgerblue')
+            skew.ax.text(self.sounding['temp'][fzl_index].m - 5, fzl_pressure.m + 20, 'FRZ', c = 'dodgerblue', fontweight = 'bold')
+        except:
+            pass
+
+        #Shade lightly the region of SCW/mixed phase ice:
+        skew.ax.fill_betweenx(self.sounding['pres'], -30 * mu.degC, -10 * mu.degC, facecolor='lightgrey', alpha=0.3)
+
+        ### Dual-y axis for hPa and km:
+        heights = np.array([0, 1, 3, 6, 9, 12, 15]) * mu.km 
+        h_idx = []
+        for h in heights+self.release_elv:
+            std_h = np.argmin(np.abs(self.sounding['alt'] - h))
+            h_idx.append(std_h)
+        for height_tick, p_tick in zip(heights, h_idx):
+            trans, _, _ = skew.ax.get_yaxis_text1_transform(0)
+            skew.ax.text(0.01, self.sounding["pres"][p_tick], '{:~.0f}'.format(height_tick), transform=trans, fontweight = 'bold', fontsize = 8, fontstyle = 'italic')
+
+        # Add a horizontal grey line to illustrate ground level:
+        skew.ax.axhline(self.sounding['pres'][0], color='saddlebrown', linestyle='-', alpha=0.7)
+
+        #Set bounds:
+        if self.sounding['temp'][0].m > 40.0:
+            skew.ax.set_x_lim(-20, 50)
+        elif self.sounding['temp'][0].m < -20.0:
+            skew.ax.set_xlim(-50,20)
+        else:
+            skew.ax.set_xlim(-30,40)
+        skew.ax.set_xlabel('Temperature ($^\circ$C)')
+        skew.ax.set_ylabel('Pressure (hPa)')
+
+        #Define heights as AGL and u,v as kt:
+        h = self.sounding['alt'] - self.release_elv
+        u = self.sounding['uwind'].to('kt')
+        v = self.sounding['vwind'].to('kt')
+
+        ##Effective Inflow Layer:
+        try:
+            (eil_idx_bot, eil_idx_top), _ = swx.get_effective_layer_indices(self)
+            pbot = self.sounding['pres'][eil_idx_bot]
+            ptop = self.sounding['pres'][eil_idx_top]
+            hbot = self.sounding['alt'][eil_idx_bot]
+            htop = self.sounding['alt'][eil_idx_top]
+
+
+            y_min_norm = 100
+            y_max_norm = self.sounding['pres'][0].m
+            # Calculate the fractions with logarithmic scaling:
+            p0_loc = ((np.log10(self.sounding['pres'][0].m) - np.log10(skew.ax.get_ylim()[0])) / (np.log10(skew.ax.get_ylim()[1]) - np.log10(skew.ax.get_ylim()[0])))
+            frac_pbot = (np.log10(y_max_norm) - np.log10(pbot.m)) / (np.log10(y_max_norm) - np.log10(y_min_norm)) + p0_loc
+            frac_ptop = (np.log10(y_max_norm) - np.log10(ptop.m)) / (np.log10(y_max_norm) - np.log10(y_min_norm)) + p0_loc
+
+            # Plot the EIL line in axis coords:
+            skew.ax.plot((0.95, 0.95), (frac_pbot, frac_ptop), c='mediumvioletred', label='EIL', lw = 1.75, transform=skew.ax.transAxes)
+            skew.ax.text(0.95, frac_ptop, 'EIL', color='mediumvioletred', fontweight = 'bold', ha='center', va='bottom', transform=skew.ax.transAxes)
+            
+            #STP, SCP, Effective SRH/SHR:           
+            shear_eff, SRH_eff = swx.get_eshr_esrh(self)
+            shear_eff = shear_eff.to('kt')
+            supcomp = swx.get_scp(self)
+            supcomp = supcomp
+        except:
+            supcomp = np.nan
+            SRH_eff = np.nan
+            shear_eff = np.nan
+
+        stp = swx.get_stp(self)
+
+        ##Hail Growth Zone:
+        # Find the index where temperature is closest to -10°C
+        index_minus_10 = np.argmin(np.abs(self.sounding['temp'].m - (-10)))
+        # Find the corresponding pressure level for -10°C
+        pressure_at_minus_10 = self.sounding['pres'][index_minus_10]
+        # Find the index where temperature is closest to -30°C
+        index_minus_30 = np.argmin(np.abs(self.sounding['temp'].m - (-30)))
+        # Find the corresponding pressure level for -30°C
+        pressure_at_minus_30 = self.sounding['pres'][index_minus_30]
+
+        if self.sounding['temp'][0].m > 0:
+            frac_hg_bot = (np.log10(y_max_norm) - np.log10(pressure_at_minus_10.m)) / (np.log10(y_max_norm) - np.log10(y_min_norm)) + p0_loc
+            frac_hg_top = (np.log10(y_max_norm) - np.log10(pressure_at_minus_30.m)) / (np.log10(y_max_norm) - np.log10(y_min_norm)) + p0_loc
+            # Plot the HGZ line in axis coords:
+            skew.ax.plot((0.95, 0.95), (frac_hg_bot, frac_hg_top), c='teal', label='HGZ', lw = 1.75, transform=skew.ax.transAxes)
+            skew.ax.text(0.95, frac_hg_top, 'HGZ', color='teal', fontweight = 'bold', ha='center', va='bottom', transform=skew.ax.transAxes)
+        elif self.sounding['temp'][0].m <= 0:
+            pass
+
+        ## PySonde-Unique Layers:
+        #Add jet highlight
+        if llj:
+            jet = self.find_llj()
+            if (jet["category"] != -1):
+                llj_index = np.argmin(np.abs(self.sounding['pres'] - jet['pres']))
+                llj_temp = self.sounding['temp'][llj_index]
+                skew.plot(self.sounding['pres'][llj_index], llj_temp, '_', label='LLJ', mew = 2, color = 'darkviolet')
+                skew.ax.text(llj_temp.m + 2.5, self.sounding['pres'][llj_index].m + 20, 'LLJ', c = 'darkviolet', fontweight = 'bold')
+        
+        #Add PBLH
+        if pblh:
+            pblh_index = np.argmin(np.abs(self.sounding['pres'] - self.pblh_pres))
+            pblh_temp = self.sounding['temp'][pblh_index]
+            skew.plot(self.sounding['pres'][pblh_index], pblh_temp, '_', label='PBLH', mew = 2, color = 'darkorange')
+            skew.ax.text(pblh_temp.m + 2.5, self.sounding['pres'][pblh_index].m + 20, 'PBLH', c = 'darkorange', fontweight = 'bold')
+    
+        #Add SBI
+        if (sbi and self.sbi):
+            skew.ax.axhline(self.sbih_pres, color="black", linestyle=":")
+            sbi_index = np.argmin(np.abs(self.sounding['pres'] - self.sbih_pres))
+            sbi_temp = self.sounding['temp'][sbi_index]
+            skew.plot(self.sounding['pres'][sbi_index], sbi_temp, '_', label='SBI', mew = 2, color = 'darkkhaki')
+            skew.ax.text(sbi_temp.m + 2.5, self.sounding['pres'][sbi_index].m + 20, 'SBI', c = 'darkkhaki', fontweight = 'bold')
+    
+        ###Calculate other variables for plotting values:
+        #Calculate the surface measurements:
+        Es = mc.saturation_vapor_pressure(self.sounding['temp'])
+        r_v = (0.622*Es)/(self.sounding['pres'] - Es)
+        Tv = mc.virtual_temperature(self.sounding['temp'], r_v, molecular_weight_ratio=0.6219569100577033)
+        RH = mc.relative_humidity_from_dewpoint(self.sounding['temp'], self.sounding['dewp'])
+        theta_e = mc.equivalent_potential_temperature(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'])
+        Tw = mc.wet_bulb_temperature(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'])
+        heat_index = mc.heat_index(self.sounding['temp'], RH)
+        speed = mc.wind_speed(u, v)
+        windchill = mc.windchill(self.sounding['temp'], speed)
+        mslp = at.mslp(self.sounding["pres"][0].m, self.sounding["temp"][0].to('K').m, self.sounding["alt"][0].m, (self.sounding["mixr"][0]/1000).m)
+        
+        #Calculate Bunkers Storm Motion for Hodograph plotting:
+        bunkers_right, bunkers_left, wind_mean = mc.bunkers_storm_motion(self.sounding['pres'], u, v, h)
+        BR =np.sqrt(bunkers_right[0]**2 + bunkers_right[1]**2)
+        BL =np.sqrt(bunkers_left[0]**2 + bunkers_left[1]**2)
+        MW = np.sqrt(wind_mean[0]**2 + wind_mean[1]**2)
+
+        #Calculate DTM (Nixon):
+        mask0 = h <= 0.5 * mu.km
+        DTMu, DTMv = ((bunkers_right[0] + np.average(u[mask0]))/ 2), ((bunkers_right[1] +np.average(v[mask0]))/2)
+        DTM = np.sqrt(DTMu**2+DTMv**2)
+
+        #Calculate the storm-relative wind:
+        sr_wind = np.sqrt(u[0]**2+v[0]**2) - MW
+        sr_wind_dir = np.arctan(u[0].m/v[0].m) - np.arctan(wind_mean[1]/wind_mean[0])
+
+        #Calculate Critical Angle:
+        (u_storm, v_storm), *_ = mc.bunkers_storm_motion(self.sounding['pres'], u, v, h)
+        crit_agl = mc.critical_angle(self.sounding['pres'], u, v, h, u_storm, v_storm)
+
+        #Helicity:
+        SRH01 = mc.storm_relative_helicity(h, u, v, 1*mu.km)
+        SRH03 = mc.storm_relative_helicity(h, u, v, 3*mu.km)
+        SRH06 = mc.storm_relative_helicity(h, u, v, 6*mu.km)
+
+        #Bulk Shear:
+        shearu01, shearv01 = mc.bulk_shear(self.sounding["pres"], u, v, depth = 1*mu.km)
+        shear01 = np.sqrt(shearu01**2 + shearv01**2)
+        shearu03, shearv03 = mc.bulk_shear(self.sounding["pres"], u, v, depth = 3*mu.km)
+        shear03 = np.sqrt(shearu03**2 + shearv03**2)
+        shearu06, shearv06 = mc.bulk_shear(self.sounding["pres"], u, v, depth = 6*mu.km)
+        shear06 = np.sqrt(shearu06**2 + shearv06**2)
+
+        ##Add Calculated Variables as Text:
+        #Plot values as text beside the skew-t:
+        ax2 = pp.gca()
+        pp.title('{} ({:.2f}, {:.2f}) Sounding for {}'.format(self.release_site, self.release_lat.m, self.release_lon.m, self.release_time.strftime("%H%M UTC %d %b %Y")), fontweight='bold')
+
+        pp.text(0, -0.15, f'LCL  = {self.lcl_pres.m:4.0f} hPa ({self.lcl_alt.to("km").m:2.2f} km)', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.19, f'LFC  = {self.lfc_pres.m:4.0f} hPa ({self.lfc_alt.to("km").m:2.2f} km)', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.23, f'EL   = {self.el_pres.m:4.0f} hPa ({self.el_alt.to("km").m:2.2f} km)', color='black', transform=ax2.transAxes)
+        
+        pp.text(0, -0.28, 'Surface Measurements', fontweight = 'bold',transform=ax2.transAxes)
+        pp.text(0, -0.32, f'T = {self.sounding["temp"].magnitude[0] * (9/5) + 32:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.36, f'$T_d$ = {self.sounding["dewp"].magnitude[0] * (9/5) + 32:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.40, f'$T_w$ = {Tw.magnitude[0] * (9/5) + 32:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.44, f'$T_v$  = {Tv.magnitude[0] * (9/5) + 32:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.48, f'RH = {RH.magnitude[0] * 100:3.0f} %', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.52, f'P = {self.sounding["pres"].magnitude[0]:5.2f} hPa (MSLP={mslp:5.2f} hPa)', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.56, f'$\\theta$  = {self.sounding["pot_temp"].magnitude[0]:5.2f} K', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.60, f'$\\theta_e$  = {theta_e.magnitude[0]:5.2f} K', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.64, f'Heat Index  = {heat_index.magnitude[0]:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+        pp.text(0, -0.68, f'Windchill  = {windchill.magnitude[0] * (9/5) + 32:5.2f} $^\circ$F', color='black', transform=ax2.transAxes)
+
+        pp.text(0.65, -0.15, 'CAPE and CIN', fontweight = 'bold',transform=ax2.transAxes)
+        pp.text(0.65, -0.19, f'SBCAPE = {self.sfc_cape.magnitude:7.2f} J/kg', color='salmon', transform=ax2.transAxes)
+        pp.text(0.65, -0.23, f'MLCAPE = {self.ml_cape.magnitude:7.2f} J/kg', color='tab:red', transform=ax2.transAxes)
+        pp.text(0.65, -0.27, f'MUCAPE = {self.mu_cape.magnitude:7.2f} J/kg', color='darkred', transform=ax2.transAxes)
+        pp.text(0.65, -0.31, f'3CAPE = {self.cape3.magnitude:7.2f} J/kg', color='red', transform=ax2.transAxes)
+        pp.text(0.65, -0.35, f'SBCIN  = {self.sfc_cin.magnitude:7.2f} J/kg', color='deepskyblue', transform=ax2.transAxes)
+        pp.text(0.65, -0.39, f'MLCIN = {self.ml_cin.magnitude:7.2f} J/kg', color='royalblue', transform=ax2.transAxes)
+        pp.text(0.65, -0.43, f'MUCIN  = {self.mu_cin.magnitude:7.2f} J/kg', color='darkblue', transform=ax2.transAxes)
+
+        pp.text(0.65, -0.48, 'Derived Measurements', fontweight = 'bold',transform=ax2.transAxes)
+        pp.text(0.65, -0.52, f'LI   = {swx.LI(self).magnitude:5.2f}', color='black', transform=ax2.transAxes)
+        pp.text(0.65, -0.56, f'PWAT  = {self.pw.to("in").m:5.2f} in', color='black', transform=ax2.transAxes)
+        try:
+            pp.text(0.65, -0.60, f'SUP  = {supcomp.magnitude:5.2f}', color='black', transform=ax2.transAxes)
+        except:
+            pp.text(0.65, -0.60, f'SUP  = {supcomp:5.2f}', color='black', transform=ax2.transAxes)
+        pp.text(0.65, -0.64, f'STP  = {stp:5.2f}', color='black', transform=ax2.transAxes)
+        pp.text(0.65, -0.68, f'WBI = {swx.get_wbi(self).magnitude:5.2f}',color='black', transform=ax2.transAxes)
+
+        pp.text(1.3, -0.15, 'SRH and Bulk Shear', fontweight = 'bold',transform=ax2.transAxes)
+        pp.text(1.3, -0.20, f'SRH 0-1 km  = {SRH01[0].magnitude:7.2f} m$^2$/s$^2$', color='palevioletred', transform=ax2.transAxes)
+        pp.text(1.3, -0.24, f'SRH 0-3 km  = {SRH03[0].magnitude:7.2f} m$^2$/s$^2$', color='deeppink', transform=ax2.transAxes)
+        pp.text(1.3, -0.28, f'SRH 0-6 km  = {SRH06[0].magnitude:7.2f} m$^2$/s$^2$', color='mediumvioletred', transform=ax2.transAxes)
+        try:
+            pp.text(1.3, -0.32, f'Effective SRH  = {SRH_eff.magnitude:7.2f} m$^2$/s$^2$', color='crimson', transform=ax2.transAxes)
+        except:
+            pp.text(1.3, -0.32, f'Effective SRH  = {SRH_eff:7.2f} m$^2$/s$^2$', color='crimson', transform=ax2.transAxes)
+        pp.text(1.3, -0.36, f'SHR 0-1 km  = {shear01.magnitude:7.2f} kt', color='deepskyblue', transform=ax2.transAxes)
+        pp.text(1.3, -0.40, f'SHR 0-3 km  = {shear03.magnitude:7.2f} kt', color='royalblue', transform=ax2.transAxes)
+        pp.text(1.3, -0.44, f'SHR 0-6 km  = {shear06.magnitude:7.2f} kt', color='darkblue', transform=ax2.transAxes)
+        try:
+            pp.text(1.3, -0.48, f'Effective SHR  = {shear_eff.magnitude:7.2f} kt', color='cadetblue', transform=ax2.transAxes)
+        except:
+            pp.text(1.3, -0.48, f'Effective SHR  = {shear_eff} kt', color='cadetblue', transform=ax2.transAxes)
+
+        pp.text(1.3, -0.52, f'Storm Relative Wind = {np.abs(sr_wind.m):3.0f}/{np.abs(sr_wind_dir.m)*57.2958+180:3.0f}', color='purple', transform=ax2.transAxes)
+        pp.text(1.3, -0.56, f'Bunkers Left Mover = {BL.m:3.0f}/{np.rad2deg(np.arctan(bunkers_left[0].m/bunkers_left[1].m)) + 180:3.0f}', color='steelblue', transform=ax2.transAxes)
+        pp.text(1.3, -0.60, f'Bunkers Right Mover = {BR.m:3.0f}/{np.rad2deg(np.arctan(bunkers_right[0].m/bunkers_right[1].m)) + 180:3.0f}', color='tab:red', transform=ax2.transAxes)
+        pp.text(1.3, -0.64, f'Bunkers Mean Wind = {MW.m:3.0f}/{np.rad2deg(np.arctan(wind_mean[0].m/wind_mean[1].m)) + 180:3.0f}', color='dimgrey', transform=ax2.transAxes)
+        pp.text(1.3, -0.68, f'Deviant Tornado Motion = {DTM.m:3.0f}/{np.rad2deg(np.arctan(DTMu.m/DTMv.m)) + 180:3.0f}', color='darkred', transform=ax2.transAxes)
+
+
+        #Place boxes around printed calculations:
+        ### (x1, x2), (y1, y2); clip_on=False allows the line to be beyond the skew-t plot
+
+        #~LCL, LFC, EL Box~#
+        pp.plot((-0.05, 0.5), (-0.12, -0.12), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+        pp.plot((-0.05, 0.5), (-0.24, -0.24), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+        pp.plot((0.5, 0.5), (-0.12, -0.24), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+        pp.plot((-0.05, -0.05), (-0.12, -0.24), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        #~Surface Var. Box~#
+        pp.plot((-0.05, 0.5), (-0.69, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+        pp.plot((-0.05, 0.5), (-0.25, -0.25), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+        pp.plot((0.5, 0.5), (-0.25, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+        pp.plot((-0.05, -0.05), (-0.25, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        #~CAPE/CIN Box~#
+        pp.plot((0.60, 1.15), (-0.44, -0.44), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+        pp.plot((0.60, 1.15), (-0.12, -0.12), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+        pp.plot((1.15, 1.15), (-0.12, -0.44), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+        pp.plot((0.60, 0.60), (-0.12, -0.44), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        #~Derived Var. Box~#
+        pp.plot((0.60, 1.15), (-0.69, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+        pp.plot((0.60, 1.15), (-0.45, -0.45), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+        pp.plot((1.15, 1.15), (-0.45, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+        pp.plot((0.60, 0.60), (-0.45, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        #~SRH/SHR Box~#
+        pp.plot((1.25, 1.90), (-0.69, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+        pp.plot((1.25, 1.90), (-0.12, -0.12), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+        pp.plot((1.90, 1.90), (-0.12, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+        pp.plot((1.25, 1.25), (-0.12, -0.69), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        if sonde_table == True:
+            pp.text(2.0, -0.15, 'PySonde Table', fontweight = 'bold',transform=ax2.transAxes)
+            jet = self.find_llj()
+            if (jet["category"] != -1):
+                pp.text(2.0, -0.20, f'LLJ = {jet["pres"].m:5.0f} hPa ({jet["alt"].to("km").m:3.2f} km)', color='black', transform=ax2.transAxes)
+            else:
+                pp.text(2.0, -0.20, f'LLJ = nan', color='black', transform=ax2.transAxes)
+            if pblh:
+                pblh_alt = self.pblh.to('km')
+                pp.text(2.0, -0.24, f'PBLH = {self.pblh_pres.m:5.0f} hPa ({pblh_alt.m:3.2f} km)', color='black', transform=ax2.transAxes)
+                pp.text(2.0, -0.28, f'SBI = {self.sbi}', color='black', transform=ax2.transAxes)
+            else:
+                pp.text(2.0, -0.24, f'PBLH = nan', color='black', transform=ax2.transAxes)
+                pp.text(2.0, -0.24, f'SBI = nan', color='black', transform=ax2.transAxes)
+
+            pp.text(2.0, -0.32, f'Sfc. $C_n^2$ = {self.calculate_Cn2(method = "fiorino")[0]:3.2f}', color='black', transform=ax2.transAxes)
+            ip500 = np.argmin((self.sounding['pres'] - 500*mu.hPa)**2)
+            ip1000 = np.argmin((self.sounding['pres'] - 1000*mu.hPa)**2)
+            thick1 = self.sounding['pres'][ip1000]
+            thick2 = self.sounding['pres'][ip500]
+            pp.text(2.0, -0.36, f'1000-500 Thickness = {self.calculate_layer_thickness(thick1, thick2).m:5.0f} m', color='black', transform=ax2.transAxes)
+
+            #~SRH/SHR Box~#
+            pp.plot((1.95, 2.45), (-0.37, -0.37), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #bottom
+            pp.plot((1.95, 2.45), (-0.12, -0.12), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #top
+            pp.plot((2.45, 2.45), (-0.12, -0.37), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #right
+            pp.plot((1.95, 1.95), (-0.12, -0.37), 'k-', lw=1, transform=ax2.transAxes, clip_on=False) #left
+
+        #Add Hodograph:
+        ax3 = fig.add_subplot(gs[:, 1:])
+        hodo = Hodograph(ax3, component_range=60.)
+        ##Change size of hodograph lines??
+        #Plot Hodograph Wind by Km AGL Intervals:
+        mask = h <= 12 * mu.km
+        intervals = np.array([0, 1, 3, 6, 9, 12]) * mu.km
+        colors = ['magenta', 'tab:red', 'tab:green', 'tab:olive', 'cyan']
+        hodo.add_grid(increment=10)
+        hodo.plot(u[mask],v[mask],linewidth=2)
+        hodo.ax.set_xlabel('Wind Speed (kt)')
+        hodo.ax.set_ylabel(' ')
+        hodo.ax.set_yticks([])
+        hodo.ax.set_xlim(-25, 65)
+        hodo.ax.set_ylim(-25, 65)
+        hodo.plot_colormapped(u[mask], v[mask], h[mask], intervals=intervals, colors=colors, linewidth=2)
+
+        #Plot Bunkers and DTM on Hodograph:
+        hodo.plot(bunkers_right[0].m,bunkers_right[1].m, color='tab:red',marker='o', markersize=10,zorder=5,clip_on=True,label='Right Mover',fillstyle='none',mew = 2)
+        hodo.plot(bunkers_left[0].m,bunkers_left[1].m, color='steelblue', marker='o', markersize=10, zorder=5,clip_on=True, label='Left Mover',fillstyle='none',mew = 2)
+        hodo.plot(wind_mean[0].m,wind_mean[1].m, color='black', marker='s', markersize=10, zorder=5,clip_on=True, label='Mean Wind',fillstyle='none',mew = 2)
+        hodo.plot(DTMu.m,DTMv.m, color='darkred', marker='v', markersize=10, zorder=5,clip_on=True, label='DTM',fillstyle='none',mew = 2)
+        hodo.ax.plot((0,bunkers_right[0].m),(0,bunkers_right[1].m), color='midnightblue', linewidth=0.5, linestyle='-',clip_on=True)
+        hodo.ax.plot((u[0].m,bunkers_right[0].m),(v[0].m,bunkers_right[1].m), color='midnightblue', linewidth=0.5, linestyle='dashdot',clip_on=True)
+        hodo.ax.text(bunkers_right[0].m + 3 , bunkers_right[1].m - 3, 'BR', fontweight='bold',clip_on=True)
+        hodo.ax.text(bunkers_left[0].m + 3 , bunkers_left[1].m - 3, 'BL', fontweight='bold',clip_on=True)
+        hodo.ax.text(wind_mean[0].m + 3 , wind_mean[1].m - 3, 'MW', fontweight='bold',clip_on=True)
+        hodo.ax.text(DTMu.m + 3 , DTMv.m - 3, 'DTM', fontweight='bold',clip_on=True)
+        hodo.ax.text(bunkers_right[0].m, bunkers_right[1].m - 8, f'{BR.m:3.0f}/{np.rad2deg(np.arctan(bunkers_right[0].m/bunkers_right[1].m)) + 180:3.0f}',clip_on=True)
+        hodo.ax.text(bunkers_left[0].m, bunkers_left[1].m - 8, f'{BL.m:3.0f}/{np.rad2deg(np.arctan(bunkers_left[0].m/bunkers_left[1].m)) + 180:3.0f}',clip_on=True)
+        hodo.ax.text(wind_mean[0].m, wind_mean[1].m - 8, f'{MW.m:3.0f}/{np.rad2deg(np.arctan(wind_mean[0].m/wind_mean[1].m)) + 180:3.0f}',clip_on=True)
+        hodo.ax.text(DTMu.m, DTMv.m - 8, f'{DTM.m:3.0f}/{np.rad2deg(np.arctan(DTMu.m/DTMv.m)) + 180:3.0f}',clip_on=True)
+        hodo.ax.text(-23, -33, f'Critical Angle:{crit_agl.m:4.0f}$\degree$', fontweight = 'semibold', fontsize = 8, color = 'maroon')
+
+        for i in intervals:
+            ind = np.argmin((h-i)**2)
+            hodo.ax.text(u[ind], v[ind], '{}'.format(i.magnitude), clip_on=True)
+
+        #Show the plot:
+        if save_dir != None:
+            pp.savefig('{}{}_{}_({}_{}).png'.format(save_dir, self.release_time.strftime("%Y%m%d_%H%M"), self.release_site, self.release_lat, self.release_lon), dpi=150, bbox_inches='tight')
+
+        return fig, skew
+
     ### Method to create an empty SkewT diagram
     ### Outputs:
     ###  fig, the pyplot figure object
@@ -771,7 +1197,7 @@ class PySonde:
         skewt.ax.set_ylim(self.sounding['pres'][0], 100.0*mu.hPa)
 
         #Add the adiabats, etc
-        skewt.plot_dry_adiabats(t0=numpy.arange(-40, 200, 10)*self.sounding_units["temp"])
+        skewt.plot_dry_adiabats(t0=np.arange(-40, 200, 10)*self.sounding_units["temp"])
         skewt.plot_moist_adiabats()
         try:
             skewt.plot_mixing_lines(pressure=self.sounding["pres"])
@@ -834,7 +1260,7 @@ class PySonde:
             #This produces a sounding on the desired height grid while preserving the
             #ressure-weighted nature of the interpolation.
 
-            #Calculate teh virtual temperature profile for hypsomteric equation
+            #Calculate the virtual temperature profile for hypsomteric equation
             vtemps = at.virt_temp(unitless["temp"]+273.15, unitless["mixr"]/1000.0)
 
             #Calculate the desired pressure levels using the hypsometric equation
@@ -842,7 +1268,7 @@ class PySonde:
             for lev in levs:
 
                 #Find the sounding levels that bracket this one
-                ind = numpy.argmin((unitless["alt"]-lev)**2)
+                ind = np.argmin((unitless["alt"]-lev)**2)
                 if (unitless["alt"][ind] > lev):
                     tind = ind
                     bind = ind-1
@@ -863,17 +1289,17 @@ class PySonde:
                 vtemp = am.layer_average(unitless["pres"][bind:tind+1], vtemps[bind:tind+1])
 
                 #Compute the new pressure level
-                plevs.append(unitless["pres"][bind]*numpy.exp(-at.G*(lev-unitless["alt"][bind])/(at.RD*vtemp)))
+                plevs.append(unitless["pres"][bind]*np.exp(-at.G*(lev-unitless["alt"][bind])/(at.RD*vtemp)))
 
             #Convert pressure list to an array
-            plevs = numpy.array(plevs)
+            plevs = np.array(plevs)
 
             #Interpolate
             for k in unitless.keys():
                 try:
                     if (k != "alt"):
-                        isounding[k] = numpy.interp(numpy.log(plevs), numpy.log(unitless["pres"][::-1]), unitless[k][::-1],
-                            left=numpy.nan, right=numpy.nan)
+                        isounding[k] = np.interp(np.log(plevs), np.log(unitless["pres"][::-1]), unitless[k][::-1],
+                            left=np.nan, right=np.nan)
                     else:
                         isounding[k] = levs
 
@@ -886,8 +1312,8 @@ class PySonde:
             for k in unitless.keys():
                 try:
                     if (k != "pres"):
-                        isounding[k] = numpy.interp(numpy.log(levs), numpy.log(unitless["pres"][::-1]), unitless[k][::-1],
-                            left=numpy.nan, right=numpy.nan)
+                        isounding[k] = np.interp(np.log(levs), np.log(unitless["pres"][::-1]), unitless[k][::-1],
+                            left=np.nan, right=np.nan)
                     else:
                         isounding[k] = levs
 
@@ -942,7 +1368,7 @@ class PySonde:
         if (maxz == None):
             zind = sounding["alt"].size-1
         else:
-            zind = numpy.arange(sounding["alt"].size)[sounding["alt"]>maxz][0]
+            zind = np.arange(sounding["alt"].size)[sounding["alt"]>maxz][0]
             
         #Check length of sounding to see if it fits within the RAMS 200pt limit
         #Interpolate if necessary (assume linear in log-p coordinates)
@@ -953,18 +1379,18 @@ class PySonde:
             pf = sounding["pres"][zind]
             
             #Create evenly spaced pressure levels
-            ip = numpy.linspace(p0, pf, 200, endpoint=True)
+            ip = np.linspace(p0, pf, 200, endpoint=True)
         
             #Interpolate       
             for k in ["dewp", "temp", "uwind", "vwind", "alt"]:
-                sounding[k] = numpy.interp(numpy.log(ip[::-1]), numpy.log(sounding["pres"][::-1]), sounding[k][::-1])[::-1]
+                sounding[k] = np.interp(np.log(ip[::-1]), np.log(sounding["pres"][::-1]), sounding[k][::-1])[::-1]
             sounding["pres"] = ip
             
         #Replace any missing values with 9999
         #9999 is based on the missing wind value in subroutine ARRSND of file rhhi.f90
         #in the RAMS initialization code.
         for k in ["dewp", "temp", "uwind", "vwind", "alt"]:
-            sounding[k][~numpy.isfinite(sounding[k])] = 9999
+            sounding[k][~np.isfinite(sounding[k])] = 9999
             
         #Write out sounding
         fn = open(spath, "w")
@@ -988,7 +1414,7 @@ class PySonde:
 
         # Remove any lines with missing data
         # Use dewpoint because if anything is missing, dewpoint will be.
-        mask = numpy.isfinite(unitless["dewp"])
+        mask = np.isfinite(unitless["dewp"])
         for k in self.sounding_units.keys():
             unitless[k] = unitless[k][mask]
 
@@ -999,7 +1425,7 @@ class PySonde:
 
         #Calculate necessary surface variables
         #First compute 10m winds from the sounding using linear interpolation
-        ind2 = (numpy.arange(heights.size, dtype="int")[(heights-10)>heights[0]])[0]
+        ind2 = (np.arange(heights.size, dtype="int")[(heights-10)>heights[0]])[0]
         ind1 = ind2-1
         
         # Interpolate winds to 10 m
@@ -1014,9 +1440,9 @@ class PySonde:
         #Check that sounding isn't longer than what WRF allows (1000 lines max)
         if (pres.size > 999): #Downsample to a reasonable number
             #Determine pressure levels to keep
-            pmid = numpy.linspace(pres[1], pres[-2], 900) #Only using 900 levels, to give WRF plenty of space
-            bind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)>0][-1] for pm in pmid)))
-            tind = numpy.array(list((numpy.arange(0, pres.size, dtype="int")[(pres-pm)<=0][0] for pm in pmid)))
+            pmid = np.linspace(pres[1], pres[-2], 900) #Only using 900 levels, to give WRF plenty of space
+            bind = np.array(list((np.arange(0, pres.size, dtype="int")[(pres-pm)>0][-1] for pm in pmid)))
+            tind = np.array(list((np.arange(0, pres.size, dtype="int")[(pres-pm)<=0][0] for pm in pmid)))
             new_pres = am.layer_interp(pres[bind], pres[tind], pmid, pres[bind], pres[tind])
             new_theta = am.layer_interp(pres[bind], pres[tind], pmid, theta[bind], theta[tind])
             new_uwind = am.layer_interp(pres[bind], pres[tind], pmid, unitless["uwind"][bind], unitless["uwind"][tind])
@@ -1083,16 +1509,16 @@ class PySonde:
 
         #Now convert variables to arrays and attach units
         for k in keys:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")
             self.sounding[k] *= self.sounding_units[k]
 
         #Attach meta data
         self.release_time = datetime(2000, 1, 1)
         self.release_site = "Unknown"
         try: #In case of missing values in the lowest levels
-            self.release_elv = self.sounding["alt"][numpy.isfinite(self.sounding["lat"]/self.sounding_units["alt"])][0]
-            self.release_lat = self.sounding["lat"][numpy.isfinite(self.sounding["lat"]/self.sounding_units["lat"])][0]
-            self.release_lon = self.sounding["lon"][numpy.isfinite(self.sounding["lat"]/self.sounding_units["lon"])][0]
+            self.release_elv = self.sounding["alt"][np.isfinite(self.sounding["lat"]/self.sounding_units["alt"])][0]
+            self.release_lat = self.sounding["lat"][np.isfinite(self.sounding["lat"]/self.sounding_units["lat"])][0]
+            self.release_lon = self.sounding["lon"][np.isfinite(self.sounding["lat"]/self.sounding_units["lon"])][0]
         except: #In case values are missing entirely
             self.release_elv = self.sounding["alt"][0]
             self.release_lat = self.sounding["lat"][0]
@@ -1154,7 +1580,7 @@ class PySonde:
             #Now for the data rows
             else:
 
-                self.sounding["time"].append(numpy.nan)
+                self.sounding["time"].append(np.nan)
                 self.sounding["pres"].append(dummy[0])
                 self.sounding["alt"].append(dummy[1])
                 self.sounding["temp"].append(dummy[2])
@@ -1168,20 +1594,20 @@ class PySonde:
         fn.close()
 
         #Now calculate uwind and vwind
-        wspd = numpy.array(wspd, dtype="float")
-        wdir = numpy.array(wdir, dtype="float")
-        self.sounding["uwind"] = wspd*numpy.cos((270-wdir)*numpy.pi/180.0)
-        self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)
+        wspd = np.array(wspd, dtype="float")
+        wdir = np.array(wdir, dtype="float")
+        self.sounding["uwind"] = wspd*np.cos((270-wdir)*np.pi/180.0)
+        self.sounding["vwind"] = wspd*np.sin((270-wdir)*np.pi/180.0)
 
         #Replace missing wind values with Nans
-        self.sounding["uwind"][wspd == -999] = numpy.nan
-        self.sounding["vwind"][wspd == -999] = numpy.nan
+        self.sounding["uwind"][wspd == -999] = np.nan
+        self.sounding["vwind"][wspd == -999] = np.nan
 
         #Now convert the other variables to arrays and attach units
         #And eliminate missing values
         for k in keys:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")
-            self.sounding[k][self.sounding[k] == -999] = numpy.nan
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")
+            self.sounding[k][self.sounding[k] == -999] = np.nan
             self.sounding[k] *= self.sounding_units[k]
 
         #Ensure that heights are AMSL and not AGL
@@ -1222,8 +1648,8 @@ class PySonde:
         skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
         fkeys = ["time", "pres", "tdry", "dp", "u_wind", "v_wind", "lon", "lat", "alt"]
         for [sk, fk] in zip(skeys, fkeys):
-            self.sounding[sk] = numpy.array(fn.variables[fk][:])*self.sounding_units[sk]
-            self.sounding[sk][self.sounding[sk] == missing_value*self.sounding_units[sk]] = numpy.nan*self.sounding_units[sk]
+            self.sounding[sk] = np.array(fn.variables[fk][:])*self.sounding_units[sk]
+            self.sounding[sk][self.sounding[sk] == missing_value*self.sounding_units[sk]] = np.nan*self.sounding_units[sk]
 
         #Close the netcdf file
         fn.close()
@@ -1271,13 +1697,13 @@ class PySonde:
         self.release_elv = self.release_elv*mu.meter
         
         # Add missing fields to the sounding
-        self.sounding["time"] = numpy.zeros(self.sounding["temp"].shape)
-        self.sounding["lon"] = numpy.ones(self.sounding["temp"].shape)*loc[0]
-        self.sounding["lat"] = numpy.ones(self.sounding["temp"].shape)*loc[1]
+        self.sounding["time"] = np.zeros(self.sounding["temp"].shape)
+        self.sounding["lon"] = np.ones(self.sounding["temp"].shape)*loc[0]
+        self.sounding["lat"] = np.ones(self.sounding["temp"].shape)*loc[1]
         
         # Add units to the variables
         for k in ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")*self.sounding_units[k]
         
         # Close the grib file
         grib.close()
@@ -1353,9 +1779,9 @@ class PySonde:
         #Close file
         fn.close()
 
-        #Once the data has been read in, convert everything to numpy arrays and attach units
+        #Once the data has been read in, convert everything to np arrays and attach units
         for k in keys:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
@@ -1376,7 +1802,7 @@ class PySonde:
         try:
             missing_value = fn.missing_value
         except:
-            missing_value = numpy.nan
+            missing_value = np.nan
 
         #Grab the launch location and time
         self.release_site = fn.station
@@ -1391,26 +1817,26 @@ class PySonde:
         #Read in the sounding data and replace missing data with NaNs
         skeys = ["pres", "temp", "dewp", "uwind", "vwind", "alt", "mixr"]
         for sk in skeys:
-            self.sounding[sk] = (numpy.array(fn.variables[sk][:])*mu(fn.variables[sk].units)).to(self.sounding_units[sk])
-            self.sounding[sk][self.sounding[sk] == missing_value*self.sounding_units[sk]] = numpy.nan*self.sounding_units[sk]
+            self.sounding[sk] = (np.array(fn.variables[sk][:])*mu(fn.variables[sk].units)).to(self.sounding_units[sk])
+            self.sounding[sk][self.sounding[sk] == missing_value*self.sounding_units[sk]] = np.nan*self.sounding_units[sk]
 
         #Add other variables that may be missing from the file (such as in model runs)
         try:
-            self.sounding["time"] = (numpy.array(fn.variables["time"][:])*mu(fn.variables["time"].units)).to(self.sounding_units["time"])
+            self.sounding["time"] = (np.array(fn.variables["time"][:])*mu(fn.variables["time"].units)).to(self.sounding_units["time"])
         except:
-            self.sounding["time"] = numpy.ones(self.sounding["temp"].shape)*numpy.nan*self.sounding_units["time"]
+            self.sounding["time"] = np.ones(self.sounding["temp"].shape)*np.nan*self.sounding_units["time"]
         try:
-            self.sounding["lon"] = (numpy.array(fn.variables["lon"][:])*mu(fn.variables["lon"].units)).to(self.sounding_units["lon"])
+            self.sounding["lon"] = (np.array(fn.variables["lon"][:])*mu(fn.variables["lon"].units)).to(self.sounding_units["lon"])
         except:
-            self.sounding["lon"] = numpy.ones(self.sounding["temp"].shape)*numpy.nan*self.sounding_units["lon"]
+            self.sounding["lon"] = np.ones(self.sounding["temp"].shape)*np.nan*self.sounding_units["lon"]
         try:
-            self.sounding["lat"] = (numpy.array(fn.variables["lat"][:])*mu(fn.variables["lat"].units)).to(self.sounding_units["lat"])
+            self.sounding["lat"] = (np.array(fn.variables["lat"][:])*mu(fn.variables["lat"].units)).to(self.sounding_units["lat"])
         except:
-            self.sounding["lat"] = numpy.ones(self.sounding["temp"].shape)*numpy.nan*self.sounding_units["lat"]
+            self.sounding["lat"] = np.ones(self.sounding["temp"].shape)*np.nan*self.sounding_units["lat"]
 
         #Ensure that no values are below AGL (happens occasionally in models
         mask = (self.sounding["alt"] >= self.release_elv)
-        if (numpy.sum(mask) < len(mask)):
+        if (np.sum(mask) < len(mask)):
             for sk in self.sounding.keys():
                 self.sounding[sk] = self.sounding[sk][mask]
 
@@ -1466,20 +1892,20 @@ class PySonde:
             wspd.append(dummy[8])
             wdir.append(dummy[9].strip())
 
-        # Once the data has been read in, convert everything to numpy arrays and attach units
+        # Once the data has been read in, convert everything to np arrays and attach units
         for k in keys:
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
         # Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
             self.sounding["alt"] += self.release_elv
 
         # Compute wind speed components in m/s
-        wspd = numpy.array(wspd, dtype="float")*0.514
-        wdir = numpy.array(wdir, dtype="float")
+        wspd = np.array(wspd, dtype="float")*0.514
+        wdir = np.array(wdir, dtype="float")
 
-        self.sounding["uwind"] = wspd*numpy.cos((270-wdir)*numpy.pi/180.0)*self.sounding_units["uwind"]
-        self.sounding["vwind"] = wspd*numpy.sin((270-wdir)*numpy.pi/180.0)*self.sounding_units["vwind"]
+        self.sounding["uwind"] = wspd*np.cos((270-wdir)*np.pi/180.0)*self.sounding_units["uwind"]
+        self.sounding["vwind"] = wspd*np.sin((270-wdir)*np.pi/180.0)*self.sounding_units["vwind"]
 
         # Close the sounding object
         fn.close()
@@ -1508,7 +1934,7 @@ class PySonde:
             self.sounding[sk] = sounding[wk].values*mu(sounding.units[wk]).to(self.sounding_units[sk])
 
         #Fill in time array with Nans
-        self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
+        self.sounding["time"] = np.ones(self.sounding["pres"].shape)*np.nan
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
@@ -1550,11 +1976,11 @@ class PySonde:
         fn.close()
 
         #Convert data to arrays
-        self.sounding["alt"] = numpy.array(self.sounding["alt"], dtype="float")
-        self.sounding["uwind"] = numpy.array(self.sounding["uwind"], dtype="float")*self.sounding_units["uwind"]
-        self.sounding["vwind"] = numpy.array(self.sounding["vwind"], dtype="float")*self.sounding_units["vwind"]
-        theta = numpy.array(theta, dtype="float")
-        qvapor = numpy.array(qvapor, dtype="float")
+        self.sounding["alt"] = np.array(self.sounding["alt"], dtype="float")
+        self.sounding["uwind"] = np.array(self.sounding["uwind"], dtype="float")*self.sounding_units["uwind"]
+        self.sounding["vwind"] = np.array(self.sounding["vwind"], dtype="float")*self.sounding_units["vwind"]
+        theta = np.array(theta, dtype="float")
+        qvapor = np.array(qvapor, dtype="float")
 
         #Calculate surface density
         tv = at.virt_temp(theta_sfc*(pres_sfc/100000.0)**(at.RD/at.CP), qvapor_sfc)
@@ -1563,8 +1989,8 @@ class PySonde:
         #Calculate pressure levels that correspond to sounding heights
         #Use the method present in module_initialize_scm_xy in WRF/dyn_em
         #Create arrays to hold values
-        rho = numpy.zeros(theta.shape)
-        pres = numpy.zeros(theta.shape)
+        rho = np.zeros(theta.shape)
+        pres = np.zeros(theta.shape)
 
         #Setup some supporting values
         rvord = at.RV/at.RD
@@ -1594,13 +2020,13 @@ class PySonde:
 
         #Fill rest of sounding
         skeys = ["time", "pres", "temp", "dewp", "uwind", "vwind", "lon", "lat", "alt"]
-        self.sounding["time"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["time"]
+        self.sounding["time"] = np.ones(temp.shape)*np.nan*self.sounding_units["time"]
         self.sounding["alt"] = self.sounding["alt"]*self.sounding_units["alt"]
         self.sounding["pres"] = pres/100.0*self.sounding_units["pres"] #Pa -> hPa
         self.sounding["temp"] = (temp-273.15)*self.sounding_units["temp"] #K -> 'C
         self.sounding["dewp"] = (at.dewpoint(at.wtoe(pres, qvapor))-273.15)*self.sounding_units["dewp"]
-        self.sounding["lon"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["lon"]
-        self.sounding["lat"] = numpy.ones(temp.shape)*numpy.nan*self.sounding_units["lat"]
+        self.sounding["lon"] = np.ones(temp.shape)*np.nan*self.sounding_units["lon"]
+        self.sounding["lat"] = np.ones(temp.shape)*np.nan*self.sounding_units["lat"]
 
         #Attach meta data
         self.release_time = datetime(2000, 1, 1)
@@ -1629,14 +2055,14 @@ class PySonde:
             if ((len(dummy) == 11) and ("." in dummy[0])):
 
                 #Read the data
-                self.sounding["time"].append(numpy.nan)
+                self.sounding["time"].append(np.nan)
                 self.sounding["pres"].append(dummy[0])
                 self.sounding["temp"].append(dummy[2])
                 self.sounding["dewp"].append(dummy[3])
                 wdir.append(dummy[6])
                 wspd.append(dummy[7])
-                self.sounding["lon"].append(numpy.nan)
-                self.sounding["lat"].append(numpy.nan)
+                self.sounding["lon"].append(np.nan)
+                self.sounding["lat"].append(np.nan)
                 self.sounding["alt"].append(dummy[1])
 
             else: #Go into metadata
@@ -1658,13 +2084,13 @@ class PySonde:
 
         #Convert lists to arrays, attach units, and calculat wind components
         for k in self.sounding.keys():
-            self.sounding[k] = numpy.array(self.sounding[k], dtype="float")*self.sounding_units[k]
+            self.sounding[k] = np.array(self.sounding[k], dtype="float")*self.sounding_units[k]
 
         #Calculate wind components
-        wspd = numpy.array(wspd, dtype="float")
-        wdir = numpy.array(wdir, dtype="float")
-        self.sounding["uwind"] = (numpy.array(wspd*numpy.cos((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["uwind"])
-        self.sounding["vwind"] = (numpy.array(wspd*numpy.sin((270-wdir)*numpy.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["vwind"])
+        wspd = np.array(wspd, dtype="float")
+        wdir = np.array(wdir, dtype="float")
+        self.sounding["uwind"] = (np.array(wspd*np.cos((270-wdir)*np.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["uwind"])
+        self.sounding["vwind"] = (np.array(wspd*np.sin((270-wdir)*np.pi/180.0), dtype="float")*mu.knot).to(self.sounding_units["vwind"])
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
@@ -1684,7 +2110,7 @@ class PySonde:
         # Pull pressure from the sounding dataset
         # Need this to mask any extraneous rows
         dewp = sounding['dewpoint']
-        mask = numpy.isfinite(dewp)
+        mask = np.isfinite(dewp)
         
         #Convert sounding to proper data format and attach to PySonde object
         self.release_time = date
@@ -1705,9 +2131,9 @@ class PySonde:
         # Handle lat/lons
         lons = header["longitude"].values
         lats = header["latitude"].values
-        if lats.size < numpy.sum(mask):
-            lons = (numpy.ones(numpy.sum(mask))*lons)*mu(header.units["longitude"]).to(self.sounding_units["lon"])
-            lats = (numpy.ones(numpy.sum(mask))*lats)*mu(header.units["latitude"]).to(self.sounding_units["lat"])
+        if lats.size < np.sum(mask):
+            lons = (np.ones(np.sum(mask))*lons)*mu(header.units["longitude"]).to(self.sounding_units["lon"])
+            lats = (np.ones(np.sum(mask))*lats)*mu(header.units["latitude"]).to(self.sounding_units["lat"])
         else:
             lons = lons[mask]*mu(header.units["longitude"]).to(self.sounding_units["lon"])
             lats = lats[mask]*mu(header.units["longitude"]).to(self.sounding_units["lon"])
@@ -1716,7 +2142,7 @@ class PySonde:
         self.sounding['lat'] = lats
 
         #Fill in time array with Nans
-        self.sounding["time"] = numpy.ones(self.sounding["pres"].shape)*numpy.nan
+        self.sounding["time"] = np.ones(self.sounding["pres"].shape)*np.nan
 
         #Ensure that heights are AMSL and not AGL
         if (self.sounding["alt"][0] < self.release_elv):
@@ -1736,19 +2162,19 @@ class PySonde:
 
         #Create dictionary for unitless sounding, starting with metadata
         try: #Fails during the initial PBLH calculation
-            unitless = {"release_site":self.release_site, "release_lat":numpy.array(self.release_lat),
-                "release_lon":numpy.array(self.release_lon), "release_elv":numpy.array(self.release_elv),
-                "release_time":self.release_time, "pblh":numpy.array(self.pblh), "pblh_pres":numpy.array(self.pblh_pres),
-                "lcl_pres":numpy.array(self.lcl_pres), "lcl_temp":numpy.array(self.lcl_temp), "lcl_alt":numpy.array(self.lcl_alt),
-                "lfc_pres":numpy.array(self.lfc_pres), "lfc_temp":numpy.array(self.lfc_temp), "lfc_alt":numpy.array(self.lfc_alt)}
+            unitless = {"release_site":self.release_site, "release_lat":np.array(self.release_lat),
+                "release_lon":np.array(self.release_lon), "release_elv":np.array(self.release_elv),
+                "release_time":self.release_time, "pblh":np.array(self.pblh), "pblh_pres":np.array(self.pblh_pres),
+                "lcl_pres":np.array(self.lcl_pres), "lcl_temp":np.array(self.lcl_temp), "lcl_alt":np.array(self.lcl_alt),
+                "lfc_pres":np.array(self.lfc_pres), "lfc_temp":np.array(self.lfc_temp), "lfc_alt":np.array(self.lfc_alt)}
         except:
-            unitless = {"release_site":self.release_site, "release_lat":numpy.array(self.release_lat),
-                "release_lon":numpy.array(self.release_lon), "release_elv":numpy.array(self.release_elv),
+            unitless = {"release_site":self.release_site, "release_lat":np.array(self.release_lat),
+                "release_lon":np.array(self.release_lon), "release_elv":np.array(self.release_elv),
                 "release_time":self.release_time}
 
         #Now handle the other arrays
         for k in self.sounding.keys():
-            unitless[k] = numpy.array(self.sounding[k])
+            unitless[k] = np.array(self.sounding[k])
 
         #Return unitless sounding
         return unitless

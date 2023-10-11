@@ -8,14 +8,28 @@ import metpy.calc as mpc
 from metpy.units import units
 import numpy as np
 
-### Function to get the Supercell Composite Parameter
+### Function to get the Lifted Index
 ### Inputs:
 ###   self, a pysonde sounding object
 ###
 ### Outputs:
-###   scp, float, Supercell Composite parameter for the provided sounding
-def get_scp(self):
+###   LI, a float
+def LI(self):
+    '''The lifted index uses the difference in envirmonental temperature and parcel
+    temperature at 500 hPa to determine whether severe weather is possible.'''
+    ip500 = np.argmin((self.sounding['pres'] - 500*units.hPa)**2)
+    prof = mpc.parcel_profile(self.sounding['pres'], self.sounding['temp'][0], self.sounding['dewp'][0]).to('degC')
+    lifted_index = self.sounding['temp'][ip500] - prof[ip500]
+    return lifted_index
 
+
+### Function to get the effective SHR and SRH
+### Inputs:
+###   self, a pysonde sounding object
+###
+### Outputs:
+###   effective shear and effective SHR, floats
+def get_eshr_esrh(self):
     # Get layers for the ESRH and Eshear calculations
     (srh_bind, srh_tind), (shear_bind, shear_tind) = get_effective_layer_indices(self)
     height = self.sounding['alt'][srh_bind]
@@ -25,6 +39,17 @@ def get_scp(self):
     psrh, nsrh, esrh = get_esrh(self, height, depth)
     eshear = np.sqrt((self.sounding['uwind'][shear_tind]-self.sounding['uwind'][shear_bind])**2+
                      (self.sounding['vwind'][shear_tind]-self.sounding['vwind'][shear_bind])**2)
+    return eshear, esrh
+
+### Function to get the Supercell Composite Parameter
+### Inputs:
+###   self, a pysonde sounding object
+###
+### Outputs:
+###   scp, float, Supercell Composite parameter for the provided sounding
+def get_scp(self):
+
+    eshear, esrh = get_eshr_esrh(self)
 
     # Apply thresholds to ESHEAR
     if (eshear > 20*units('m/s')):
