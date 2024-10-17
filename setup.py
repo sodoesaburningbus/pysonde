@@ -20,5 +20,5 @@ setuptools.setup(
     ],
     python_requires='>=3.0',
     install_requires=["metpy>=1.0", "numpy", "siphon"],
-    packages=['testing']
+    packages=setuptools.find_packages()
 )
