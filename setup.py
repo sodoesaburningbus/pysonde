@@ -19,5 +19,6 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     python_requires='>=3.0',
-    install_requires=["metpy>=1.0", "numpy", "siphon"]
+    install_requires=["metpy>=1.0", "numpy", "siphon"],
+    packages=setup.tools.find_packages()
 )
