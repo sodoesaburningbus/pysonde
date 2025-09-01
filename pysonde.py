@@ -738,6 +738,12 @@ class PySonde:
             self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
             fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
 
+        # Add an info box with CAPE, etc.
+        ushear6, vshear6 = self.calculate_shear(10*mu.meter, 6000*mu.meter)
+        shear6 = numpy.sqrt(ushear6**2+vshear6**2).to(mu.knot)
+        info_string = f"MUCAPE: {self.mu_cape.magnitude:.0f} J/kg\nMUCIN: {self.mu_cin.magnitude:.0f} J/kg\nSFC CAPE: {self.mu_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nSHEAR 6km: {shear6.magnitude:.0f} kts"
+        skewt.ax.text(0.65, 0.8, info_string, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=0.8), transform=skewt.ax.transAxes)
+
         #Add jet highlight
         if llj:
             jet = self.find_llj()
@@ -1495,7 +1501,10 @@ class PySonde:
         sounding = WyomingUpperAir.request_data(date, self.fpath)
 
         #Convert sounding to proper data format and attach to PySonde object
-        self.release_time = datetime.utcfromtimestamp(sounding["time"].values[0].tolist()/1e9)
+        try:
+            self.release_time = datetime.utcfromtimestamp(sounding["time"].values[0].tolist()/1e9)
+        except:
+            self.release_time = sounding["time"].values[0].astype(datetime)
         self.release_site = sounding["station"].values[0]
         self.release_lat = sounding["latitude"].values[0]*mu(sounding.units["latitude"]).to(mu.deg)
         self.release_lon = sounding["longitude"].values[0]*mu(sounding.units["longitude"]).to(mu.deg)
