@@ -741,7 +741,7 @@ class PySonde:
         # Add an info box with CAPE, etc.
         ushear6, vshear6 = self.calculate_shear(10*mu.meter, 6000*mu.meter)
         shear6 = numpy.sqrt(ushear6**2+vshear6**2).to(mu.knot)
-        info_string = f"MUCAPE: {self.mu_cape.magnitude:.0f} J/kg\nMUCIN: {self.mu_cin.magnitude:.0f} J/kg\nSFC CAPE: {self.mu_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nSHEAR 6km: {shear6.magnitude:.0f} kts"
+        info_string = f"MUCAPE: {self.mu_cape.magnitude:.0f} J/kg\nMUCIN: {self.mu_cin.magnitude:.0f} J/kg\nSFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nSHEAR 6km: {shear6.magnitude:.0f} kts"
         skewt.ax.text(0.65, 0.8, info_string, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=0.8), transform=skewt.ax.transAxes)
 
         #Add jet highlight
