@@ -1426,7 +1426,7 @@ class PySonde:
         sounding = WyomingUpperAir.request_data(date, self.fpath)
 
         #Convert sounding to proper data format and attach to PySonde object
-        self.release_time = datetime.utcfromtimestamp(sounding["time"].values[0].tolist()/1e9)
+        self.release_time = sounding["time"].values[0].astype(datetime)
         self.release_site = sounding["station"].values[0]
         self.release_lat = sounding["latitude"].values[0]*mu(sounding.units["latitude"]).to(mu.deg)
         self.release_lon = sounding["longitude"].values[0]*mu(sounding.units["longitude"]).to(mu.deg)
