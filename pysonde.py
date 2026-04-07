@@ -22,7 +22,7 @@
 ###  UAH - University of Alabama in Huntsville UPSTORM group soundings
 ###  WRF - Weather Research and Forecasting Single Column Model Input Sounding
 ###  WYO - University of Wyoming sounding file
-###  WYOWEB - University of Wyoming sounding online archive. (These are pulled from online.)
+###  WEB - University of Wyoming sounding online archive. (These are pulled from online.)
 ###  IGRA2 - The IGRA2 online sounding archive. (These are pulled from online.)
 ###  PSF - PySonde Sounding Format, a netCDF4 format more fully described in the documentation.
 ###  CSV - CSV files originally outputted by PySonde
