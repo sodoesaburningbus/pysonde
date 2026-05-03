@@ -42,7 +42,7 @@ def get_scp(self):
 
     return max(scp, 0)
 
-### Function to get the Supercell Composite Parameter
+### Function to get the Significant Tornado Parameter
 ### Inputs:
 ###   self, a pysonde sounding object
 ###
@@ -189,9 +189,6 @@ def get_wbi(self):
     vshear1 = vshear1.to(self.units.meter/self.units.second)
     ushear6 = ushear6.to(self.units.meter/self.units.second)
     vshear6 = vshear6.to(self.units.meter/self.units.second)
-
-    print(np.sqrt(ushear1**2+vshear1**2).to(self.units.kt))
-    print(np.sqrt(ushear6**2+vshear6**2).to(self.units.kt))
 
     # Compute shear angle
     alpha1km= np.arctan(vshear1/ushear1)

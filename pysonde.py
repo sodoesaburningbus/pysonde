@@ -47,7 +47,7 @@ from datetime import timedelta
 import matplotlib.pyplot as pp
 from metpy.units import units as mu
 import metpy.calc as mc
-from metpy.plots import SkewT
+from metpy.plots import SkewT, Hodograph
 import netCDF4 as nc
 import numpy
 import os
@@ -703,7 +703,109 @@ class PySonde:
         #Return jet characteristics
         return jet
 
+    ### Function to compute severe weather information
+    ### Returns them as a dictionary containing:
+    ###  Bunkers right motion vector, bunkers left motion vector,
+    ###  Supercell composite, sigtor, whirly boi index, 
+    ###  bulk richardson number, effective storm relative helicity,
+    ###  indices of the effective storm inflow layer
+    def get_severe_indices(self):
+
+        # Get storm motions
+        brm, blm, bwm = mc.bunkers_storm_motion(self.sounding['pres'], self.sounding['uwind'], self.sounding['vwind'], self.sounding['alt'])
+
+        # Get effective inflow layer
+        elayer, dummy = swx.get_effective_layer_indices(self)
+        esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]])
+
+        # Get the shears
+        ushear1, vshear1 = self.calculate_shear(10.0*mu.meter, 1000.0*mu.meter)
+        shear1 = numpy.sqrt(ushear1**2+vshear1**2).to(mu.knot)
+        ushear3, vshear3 = self.calculate_shear(10.0*mu.meter, 3000.0*mu.meter)
+        shear3 = numpy.sqrt(ushear3**2+vshear3**2).to(mu.knot)
+        ushear6, vshear6 = self.calculate_shear(10.0*mu.meter, 6000.0*mu.meter)
+        shear6 = numpy.sqrt(ushear6**2+vshear6**2).to(mu.knot)
+
+        # Compute severe weather indicies
+        severe = {
+            'BUNKERSRIGHT':brm,
+            'BUNKERSLEFT': blm,
+            'SCP': swx.get_scp(self),
+            'STP': swx.get_stp(self),
+            'WBI': swx.get_wbi(self),
+            'BRN': self.mu_cape/(0.5*(shear6**2)),
+            'ESRH': esrh,
+            'ELAYER': elayer,
+            'SHEAR1':shear1,
+            'SHEAR3':shear3,
+            'SHEAR6':shear6,
+        }
+
+        return severe
+
     #####-------------------METHODS TO PLOT OR OUTPUT SOUNDING-------------------#####
+
+    ### Method to plot an advanced sounding
+    ### It shows parcel path, effective inflow layer, and various
+    ### severe storm parameters.
+    def advanced_skewt(self, nbarbs=4, llj=False, pblh=False, sbi=False):
+
+        # Get the severe weather indices
+        severe = self.get_severe_indices()
+
+        # Create the empty SkewT
+        fig, skewt = self.empty_skewt(figsize=(18,12), rect=(0.05, 0.30, 0.50, 0.68))
+
+        ### Plot the sounding
+        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="firebrick")
+        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="forestgreen")
+        try:
+            skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
+        except:
+            pass
+
+        skewt.plot_barbs(self.sounding["pres"][::nbarbs], self.sounding["uwind"][::nbarbs], self.sounding["vwind"][::nbarbs])
+
+        # Add the Release time and location to plot
+        skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
+            self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
+            fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
+
+        ### Add the hodograph
+        hax = fig.add_axes((0.5, 0.382, 0.555, 0.555))
+        h = Hodograph(hax, component_range=80)
+
+        # Setup axis and grid
+        h.add_grid(increment=20, ls='-', lw=1.5, alpha=0.5)
+        h.add_grid(increment=10, ls='--', lw=1.0, alpha=0.2)
+        hax.set_box_aspect(1)
+        hax.set_xticklabels([])
+        hax.set_yticklabels([])
+        hax.set_xticks([])
+        hax.set_yticks([])
+        hax.set_xlabel('')
+        hax.set_ylabel('')
+
+        # Add data
+        h.plot(self.sounding['uwind'], self.sounding['vwind'])
+        hax.arrow(0, 0, severe['BUNKERSRIGHT'][0].m - 0.3, severe['BUNKERSRIGHT'][1].m - 0.3,
+                  linewidth=2, color='black', label='Bunkers RM Vector',
+                  length_includes_head=True, head_width=2)
+        hax.arrow(0, 0, severe['BUNKERSLEFT'][0].m - 0.3, severe['BUNKERSLEFT'][1].m - 0.3,
+                  linewidth=2, color='black', label='Bunkers LM Vector',
+                  length_includes_head=True, head_width=2)
+        hax.text((severe['BUNKERSRIGHT'][0].m + 0.5), (severe['BUNKERSRIGHT'][1].m - 0.5), 'BRM', weight='bold', ha='left',
+                    fontsize=13)
+        hax.text((severe['BUNKERSLEFT'][0].m + 0.5), (severe['BUNKERSLEFT'][1].m - 0.5), 'LLM', weight='bold', ha='left',
+                    fontsize=13)
+
+
+        ### Add an info box with CAPE, etc.
+        #info_string = f"MUCAPE: {self.mu_cape.magnitude:.0f} J/kg\nMUCIN: {self.mu_cin.magnitude:.0f} J/kg\nSFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nSHEAR 6km: {shear6.magnitude:.0f} kts"
+        #skewt.ax.text(0.65, 0.8, info_string, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=0.8), transform=skewt.ax.transAxes)
+
+        # Returning
+        return fig, skewt
 
     ### Method to plot a basic sounding
     ### Includes only temperature, dewpoint, and the parcel path
@@ -721,8 +823,8 @@ class PySonde:
         fig, skewt = self.empty_skewt()
 
         #Plot the sounding
-        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="red")
-        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="green")
+        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="firebrick")
+        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="forestgreen")
         try:
             skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
         except:
@@ -765,11 +867,11 @@ class PySonde:
     ### Outputs:
     ###  fig, the pyplot figure object
     ###  skewt, the MetPy SkewT axis object
-    def empty_skewt(self):
+    def empty_skewt(self, figsize=(9,9), rotation=45, rect=None):
 
         #First create the figure and SkewT objects
-        fig = pp.figure(figsize=(9,9))
-        skewt = SkewT(fig, rotation=45)
+        fig = pp.figure(figsize=figsize)
+        skewt = SkewT(fig, rotation=rotation, rect=rect)
 
         #Now set the limits
         pmask = self.sounding['pres'] >= 100.0*mu.hPa
