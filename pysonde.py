@@ -151,7 +151,7 @@ class PySonde:
         # Calculate planetary boundary layer height
         self.calculate_pblh()
 
-        # Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, and Precipitable Water (PW)
+        # Calculate the basic thermo properties, (SFC CAPE/CIN, LCL, Precipitable Water (PW), etc.
         self.calculate_basic_thermo()
 
         #Returning
@@ -191,9 +191,13 @@ class PySonde:
         except Exception as err:
             print("WARNING: No LFC because:\n{}".format(err))
             print("Likely due to atmospheric stability.")
-            self.lfc_pres = numpy.nan
-            self.lfc_temp = numpy.nan
-            self.lfc_alt = numpy.nan
+            self.lfc_pres = numpy.nan*mu.hPa
+            self.lfc_temp = numpy.nan*mu.celsius
+            self.lfc_alt = numpy.nan*mu.meter
+
+        # Convective Condensation Level
+        self.ccl_pres, self.ccl_temp, self.conv_temp = mc.ccl(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'])
+        self.ccl_alt = self.sounding["alt"][numpy.nanargmin((self.ccl_pres-self.sounding["pres"])**2)]
 
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
         try:
@@ -793,6 +797,12 @@ class PySonde:
 
         skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs])
 
+        # Add the LCL, CCL, and LFC
+        print(self.lcl_temp, self.lcl_pres)
+        skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='goldenrod', marker='s', label='LCL', s=42)
+        skewt.ax.scatter(self.ccl_temp, self.ccl_pres, color='goldenrod', marker='p', label='CCL', s=42)
+        skewt.ax.scatter(self.lfc_temp, self.lfc_pres, color='goldenrod', marker='X', label='LFC', s=42)
+
         # Add shading for the effective inflow layer
         if (severe['ELAYER'][1]>severe['ELAYER'][0]):
             skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][severe['ELAYER'][0]], y2=self.sounding["pres"][severe['ELAYER'][1]],
@@ -803,9 +813,8 @@ class PySonde:
         skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][hmask][0], y2=self.sounding["pres"][hmask][-1],
                                 color='dodgerblue', alpha=0.3, label='Hail Zone')
 
-
         # Add a legend
-        skewt.ax.legend(loc='upper left', bbox_to_anchor=(1.09, 0.17), fontsize=10, fancybox=True, shadow=True)
+        fig.legend(loc='upper left', bbox_to_anchor=(0.635, 0.45), fontsize=10, fancybox=True, shadow=True, ncols=3)
 
 
         # Add the Release time and location to plot
@@ -865,15 +874,24 @@ class PySonde:
         tax.set_yticks([])
         tax.set_xlabel('')
         tax.set_ylabel('')
+        tax.axis('off')
         
-        info_string1 = f"SFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg    SFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nML CAPE: {self.ml_cape.magnitude:.0f} J/kg    ML CIN: {self.ml_cin.magnitude:.0f} J/kg\nMU CAPE: {self.mu_cape.magnitude:.0f} J/kg    MU CIN: {self.mu_cin.magnitude:.0f} J/kg"
-        tax.text(0.01, 0.96, info_string1, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
+        info_string1 = f"SFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg\nML CAPE: {self.ml_cape.magnitude:.0f} J/kg\nMU CAPE: {self.mu_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nML CIN: {self.ml_cin.magnitude:.0f} J/kg\nMU CIN: {self.mu_cin.magnitude:.0f} J/kg"
+        #tax.text(0.01, 0.96, info_string1, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
 
-        info_string2 = f"0-1km Shear: {severe['SHEAR1']:.0f} kts\n0-3km Shear: {severe['SHEAR3']:.0f} kts\n0-6km Shear: {severe['SHEAR6']:.0f} kts"
-        tax.text(0.01, 0.75, info_string2, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
+        info_string2 = f"\n\n0-1km Shear: {severe['SHEAR1']:.0f} kts\n0-3km Shear: {severe['SHEAR3']:.0f} kts\n0-6km Shear: {severe['SHEAR6']:.0f} kts"
+        #tax.text(0.01, 0.54, info_string2, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
 
-        info_string3 = f"Supercell Param: {severe['SCP']:.0f}\nSigTor: {severe['STP']:.0f}\nWBI: {severe['WBI']:.0f}\nBulk Richardson: {severe['BRN']:.0f}"
-        tax.text(0.01, 0.54, info_string3, transform=tax.transAxes, ha='left', va='top', fontsize=12)
+        info_string3 = f"\nLCL: {self.lcl_pres.magnitude:.0f} hPa\nCCL: {self.ccl_pres.magnitude:.0f} hPa\nConv. Temp. {self.conv_temp.magnitude:.0f} $\degree$C\nLFC: {self.lfc_pres.magnitude:.0f} hPa"
+        #tax.text(0.01, 0.33, info_string3, transform=tax.transAxes, ha='left', va='top', fontsize=12)
+
+        info_string = info_string1+info_string2+info_string3
+        tax.text(0.04, 0.965, info_string, transform=tax.transAxes, ha='left', va='top', fontsize=12,
+                 bbox={
+                     "boxstyle":"round", "ec":"black", "fc":"white"
+        })
+
+        info_string4 = f"Supercell Param: {severe['SCP']:.0f}\nSigTor: {severe['STP']:.0f}\nWBI: {severe['WBI']:.0f}\nBulk Richardson: {severe['BRN']:.0f}"
 
         # Returning
         return fig, skewt
