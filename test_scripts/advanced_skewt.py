@@ -5,8 +5,8 @@
 import matplotlib.pyplot as pp
 from pysonde.pysonde import PySonde
 
-sonde = PySonde('../examples/example_sounding_nws.txt', 'NWS')
+sonde = PySonde('sounding_BMX_2011042718.csv', 'CSV')
 
-fig, skewt = sonde.advanced_skewt(nbarbs=20)
+fig, skewt = sonde.advanced_skewt(nbarbs=3)
 fig.savefig('test.png')
 pp.close()

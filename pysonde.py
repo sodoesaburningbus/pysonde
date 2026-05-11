@@ -44,6 +44,7 @@ import pysonde.hrrr_funcs as hf
 import pysonde.severewx as swx
 from datetime import datetime
 from datetime import timedelta
+from matplotlib.gridspec import GridSpec
 import matplotlib.pyplot as pp
 from metpy.units import units as mu
 import metpy.calc as mc
@@ -197,9 +198,13 @@ class PySonde:
             self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"][inds], self.sounding["temp"][inds],
                 self.sounding["dewp"][inds], self.parcel_path)
             
+            # Mixed-layer CAPE and CIN
+            self.ml_cape, self.ml_cin = mc.mixed_layer_cape_cin(self.sounding['pres'][inds], self.sounding['temp'][inds],
+                self.sounding['dewp'][inds])
+
             # Most unstable CAPE and CIN
-            self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'], self.sounding['temp'],
-                self.sounding['dewp'])
+            self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'][inds], self.sounding['temp'][inds],
+                self.sounding['dewp'][inds])
 
         #Do this when parcel path fails to converge
         except Exception as e:
@@ -730,15 +735,15 @@ class PySonde:
         severe = {
             'BUNKERSRIGHT':brm,
             'BUNKERSLEFT': blm,
-            'SCP': swx.get_scp(self),
-            'STP': swx.get_stp(self),
-            'WBI': swx.get_wbi(self),
-            'BRN': self.mu_cape/(0.5*(shear6**2)),
+            'SCP': swx.get_scp(self).magnitude,
+            'STP': swx.get_stp(self).magnitude,
+            'WBI': swx.get_wbi(self).magnitude,
+            'BRN': (self.mu_cape/(0.5*(shear6**2))).magnitude,
             'ESRH': esrh,
             'ELAYER': elayer,
-            'SHEAR1':shear1,
-            'SHEAR3':shear3,
-            'SHEAR6':shear6,
+            'SHEAR1':shear1.magnitude,
+            'SHEAR3':shear3.magnitude,
+            'SHEAR6':shear6.magnitude,
         }
 
         return severe
@@ -748,31 +753,58 @@ class PySonde:
     ### Method to plot an advanced sounding
     ### It shows parcel path, effective inflow layer, and various
     ### severe storm parameters.
-    def advanced_skewt(self, nbarbs=4, llj=False, pblh=False, sbi=False):
+    def advanced_skewt(self, nbarbs=10, llj=False, pblh=False, sbi=False, rotation=45):
+
+        # Set a mask for data to be 100 hPa or less
+        pmask = self.sounding["pres"]>=100.0*mu.hPa
 
         # Get the severe weather indices
         severe = self.get_severe_indices()
 
-        # Create the empty SkewT
-        fig, skewt = self.empty_skewt(figsize=(18,12), rect=(0.05, 0.30, 0.50, 0.68))
+        # Setup the figure
+        fig = pp.figure(layout='constrained', figsize=(12,10))
+        gs = GridSpec(3,3, figure=fig)
+        skewt = SkewT(fig, rotation=rotation, subplot=gs[:2,:2])
+        hax = fig.add_subplot(gs[0,2])
+        hax.set_position((0.61, 0.563, 0.385, 0.385))
+        tax = fig.add_subplot(gs[2,1:])
+        cax = fig.add_subplot(gs[2,0])
 
         ### Plot the sounding
-        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="firebrick")
-        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="forestgreen")
+        tw = mc.wet_bulb_temperature(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
+        skewt.plot(self.sounding["pres"], self.sounding["temp"], color="firebrick", label='T')
+        skewt.plot(self.sounding["pres"], self.sounding["dewp"], color="forestgreen", label='Td')
+        skewt.plot(self.sounding["pres"], tw, color="dodgerblue", label='Tw') # Wet-bulb temperature
         try:
-            skewt.plot(self.sounding["pres"], self.parcel_path, color="black")
+            skewt.plot(self.sounding["pres"], self.parcel_path, color="black", label='Parcel')
         except:
             pass
 
-        skewt.plot_barbs(self.sounding["pres"][::nbarbs], self.sounding["uwind"][::nbarbs], self.sounding["vwind"][::nbarbs])
+        skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs])
+
+        # Add shading for the effective inflow layer
+        if (severe['ELAYER'][1]>severe['ELAYER'][0]):
+            skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][severe['ELAYER'][0]], y2=self.sounding["pres"][severe['ELAYER'][1]],
+                                color='magenta', alpha=0.2, label='Eff. Inflow')
+            
+        # Add shading for hail growth
+        hmask = (self.sounding['temp']<=-10*mu.celsius) & (self.sounding['temp']>=-30*mu.celsius)
+        skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][hmask][0], y2=self.sounding["pres"][hmask][-1],
+                                color='dodgerblue', alpha=0.3, label='Hail Zone')
+
+
+        # Add a legend
+        skewt.ax.legend(loc='upper left', bbox_to_anchor=(1.06, 0.25), fontsize=10, fancybox=True, shadow=True)
+
 
         # Add the Release time and location to plot
         skewt.ax.set_title("Date: {}; Station: {}\nLon: {:.2f}; Lat: {:.2f}".format(
             self.release_time.strftime("%Y-%m-%d %H%M"), self.release_site, self.release_lon, self.release_lat),
             fontsize=14, fontweight="bold", horizontalalignment="left", x=0)
+        skewt.ax.set_xlabel('Temperature ($\degree$C)', fontsize=12, fontweight='bold')
+        skewt.ax.set_ylabel('Pressure (hPa)', fontsize=12, fontweight='bold')
 
         ### Add the hodograph
-        hax = fig.add_axes((0.5, 0.382, 0.555, 0.555))
         h = Hodograph(hax, component_range=80)
 
         # Setup axis and grid
@@ -787,7 +819,9 @@ class PySonde:
         hax.set_ylabel('')
 
         # Add data
-        h.plot(self.sounding['uwind'], self.sounding['vwind'])
+        cont = h.plot_colormapped(self.sounding['uwind'][pmask], self.sounding['vwind'][pmask], c=self.sounding['alt'][pmask], cmap='plasma')
+        hcb = fig.colorbar(cont, ax=hax, pad=0.01, orientation='horizontal', shrink=0.7)
+        hcb.set_label('Height', fontsize=12, fontweight='bold')
         hax.arrow(0, 0, severe['BUNKERSRIGHT'][0].m - 0.3, severe['BUNKERSRIGHT'][1].m - 0.3,
                   linewidth=2, color='black', label='Bunkers RM Vector',
                   length_includes_head=True, head_width=2)
@@ -799,10 +833,36 @@ class PySonde:
         hax.text((severe['BUNKERSLEFT'][0].m + 0.5), (severe['BUNKERSLEFT'][1].m - 0.5), 'LLM', weight='bold', ha='left',
                     fontsize=13)
 
+        # Add the CAPE and CIN plot
+        capes = [self.sfc_cape.magnitude, self.ml_cape.magnitude, self.mu_cape.magnitude]
+        cins = [self.sfc_cin.magnitude, self.ml_cin.magnitude, self.mu_cin.magnitude]
+        cax.bar([1, 2, 3], capes, color='sandybrown',
+                    width=0.8, zorder=9, edgecolor='black')
+        cax.bar([1, 2, 3], cins, bottom=capes, color='sandybrown',
+                    hatch='/', width=0.8, zorder=10, edgecolor='black')
+        cax.set_xticks([1,2,3])
+        cax.set_xticklabels(['SFC', 'ML', 'MU'], fontsize=12, fontweight='bold')
+
+        cax.set_xlim(0,4)
+        cax.set_ylim(0, max(4500, (self.mu_cape+self.mu_cin).magnitude+100))
+        cax.set_ylabel('CAPE', fontsize=12, fontweight='bold')
 
         ### Add an info box with CAPE, etc.
-        #info_string = f"MUCAPE: {self.mu_cape.magnitude:.0f} J/kg\nMUCIN: {self.mu_cin.magnitude:.0f} J/kg\nSFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nSHEAR 6km: {shear6.magnitude:.0f} kts"
-        #skewt.ax.text(0.65, 0.8, info_string, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=0.8), transform=skewt.ax.transAxes)
+        tax.set_xticklabels([])
+        tax.set_yticklabels([])
+        tax.set_xticks([])
+        tax.set_yticks([])
+        tax.set_xlabel('')
+        tax.set_ylabel('')
+        
+        info_string1 = f"SFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg    SFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nML CAPE: {self.ml_cape.magnitude:.0f} J/kg    ML CIN: {self.ml_cin.magnitude:.0f} J/kg\nMU CAPE: {self.mu_cape.magnitude:.0f} J/kg    MU CIN: {self.mu_cin.magnitude:.0f} J/kg"
+        tax.text(0.01, 0.96, info_string1, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
+
+        info_string2 = f"0-1km Shear: {severe['SHEAR1']:.0f} kts\n0-3km Shear: {severe['SHEAR3']:.0f} kts\n0-6km Shear: {severe['SHEAR6']:.0f} kts"
+        tax.text(0.01, 0.75, info_string2, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
+
+        info_string3 = f"Supercell Param: {severe['SCP']:.0f}\nSigTor: {severe['STP']:.0f}\nWBI: {severe['WBI']:.0f}\nBulk Richardson: {severe['BRN']:.0f}"
+        tax.text(0.01, 0.54, info_string3, transform=tax.transAxes, ha='left', va='top', fontsize=12)
 
         # Returning
         return fig, skewt
@@ -867,7 +927,7 @@ class PySonde:
     ### Outputs:
     ###  fig, the pyplot figure object
     ###  skewt, the MetPy SkewT axis object
-    def empty_skewt(self, figsize=(9,9), rotation=45, rect=None):
+    def empty_skewt(self, figsize=(9,9), rotation=45, rect=None, constrained_layout=True):
 
         #First create the figure and SkewT objects
         fig = pp.figure(figsize=figsize)
