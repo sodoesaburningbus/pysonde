@@ -762,13 +762,15 @@ class PySonde:
         severe = self.get_severe_indices()
 
         # Setup the figure
-        fig = pp.figure(layout='constrained', figsize=(12,10))
+        fig = pp.figure(layout='constrained', figsize=(13,10))
         gs = GridSpec(3,3, figure=fig)
         skewt = SkewT(fig, rotation=rotation, subplot=gs[:2,:2])
         hax = fig.add_subplot(gs[0,2])
-        hax.set_position((0.61, 0.563, 0.385, 0.385))
+        hax.set_position((0.52, 0.445, 0.5, 0.5))
         tax = fig.add_subplot(gs[2,1:])
+        tax.set_position((0.43, 0.03, 0.55, 0.27))
         cax = fig.add_subplot(gs[2,0])
+        cax.set_position((0.06, 0.03, 0.35, 0.27))
 
         ### Plot the sounding
         tw = mc.wet_bulb_temperature(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
@@ -794,7 +796,7 @@ class PySonde:
 
 
         # Add a legend
-        skewt.ax.legend(loc='upper left', bbox_to_anchor=(1.06, 0.25), fontsize=10, fancybox=True, shadow=True)
+        skewt.ax.legend(loc='upper left', bbox_to_anchor=(1.09, 0.17), fontsize=10, fancybox=True, shadow=True)
 
 
         # Add the Release time and location to plot
@@ -820,7 +822,7 @@ class PySonde:
 
         # Add data
         cont = h.plot_colormapped(self.sounding['uwind'][pmask], self.sounding['vwind'][pmask], c=self.sounding['alt'][pmask], cmap='plasma')
-        hcb = fig.colorbar(cont, ax=hax, pad=0.01, orientation='horizontal', shrink=0.7)
+        hcb = fig.colorbar(cont, ax=hax, pad=0.01, orientation='horizontal', shrink=0.65)
         hcb.set_label('Height', fontsize=12, fontweight='bold')
         hax.arrow(0, 0, severe['BUNKERSRIGHT'][0].m - 0.3, severe['BUNKERSRIGHT'][1].m - 0.3,
                   linewidth=2, color='black', label='Bunkers RM Vector',
@@ -838,14 +840,14 @@ class PySonde:
         cins = [self.sfc_cin.magnitude, self.ml_cin.magnitude, self.mu_cin.magnitude]
         cax.bar([1, 2, 3], capes, color='sandybrown',
                     width=0.8, zorder=9, edgecolor='black')
-        cax.bar([1, 2, 3], cins, bottom=capes, color='sandybrown',
+        cax.bar([1, 2, 3], numpy.abs(cins), bottom=capes, color='peru',
                     hatch='/', width=0.8, zorder=10, edgecolor='black')
         cax.set_xticks([1,2,3])
         cax.set_xticklabels(['SFC', 'ML', 'MU'], fontsize=12, fontweight='bold')
 
         cax.set_xlim(0,4)
-        cax.set_ylim(0, max(4500, (self.mu_cape+self.mu_cin).magnitude+100))
-        cax.set_ylabel('CAPE', fontsize=12, fontweight='bold')
+        cax.set_ylim(0, max(4500, abs((self.mu_cape+self.mu_cin).magnitude)+100))
+        cax.set_ylabel('CAPE & CIN (J/kg)', fontsize=12, fontweight='bold')
 
         ### Add an info box with CAPE, etc.
         tax.set_xticklabels([])
