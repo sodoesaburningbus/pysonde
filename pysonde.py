@@ -129,13 +129,26 @@ class PySonde:
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
 
-        # identify bad levels in sounding and remove
+        # Identify bad levels in sounding and remove
         inds = numpy.isfinite(self.sounding["dewp"])
         for k in self.sounding.keys():
             try:
                 self.sounding[k] = self.sounding[k][inds]
             except:
                 continue
+
+        # Remove duplicate pressure levels
+        old_pres = []
+        bad_inds = []
+        for i in range(self.sounding["pres"].size):
+            if self.sounding["pres"][i] in old_pres:
+                bad_inds.append(i)
+            old_pres.append(self.sounding["pres"][i])
+        for k in self.sounding.keys():
+            try:
+                self.sounding[k] = numpy.delete(self.sounding[k], bad_inds)
+            except:
+                pass
 
         # Add potential temperature to the sounding
         unitless = self.strip_units()
@@ -176,18 +189,9 @@ class PySonde:
         try:
             self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
                 self.sounding["dewp"][0])
-            self.mu_parcel = mc.most_unstable_parcel(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
-            self.mu_parcel_path = mc.parcel_profile(self.sounding["pres"][self.mu_parcel[-1]:], self.sounding["temp"][self.mu_parcel[-1]],
-                self.sounding["dewp"][self.mu_parcel[-1]])
-            pos = (self.parcel_path > self.sounding["temp"])
-            lfc = (self.sounding["pres"][pos])[0]
-            i = 0
-            while (lfc > self.lcl_pres):
-                i += 1
-                lfc = (self.sounding["pres"][pos])[i]
-            self.lfc_pres = lfc
-            self.lfc_temp = (self.sounding["temp"][pos])[i]
-            self.lfc_alt = (self.sounding["alt"][pos])[i]
+            self.lfc_pres, self.lfc_temp = mc.lfc(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"],
+                parcel_temperature_profile=self.parcel_path)
+            self.lfc_alt = self.sounding["alt"][numpy.nanargmin((self.lfc_pres-self.sounding["pres"])**2)]
         except Exception as err:
             print("WARNING: No LFC because:\n{}".format(err))
             print("Likely due to atmospheric stability.")
@@ -198,6 +202,15 @@ class PySonde:
         # Convective Condensation Level
         self.ccl_pres, self.ccl_temp, self.conv_temp = mc.ccl(self.sounding['pres'], self.sounding['temp'], self.sounding['dewp'])
         self.ccl_alt = self.sounding["alt"][numpy.nanargmin((self.ccl_pres-self.sounding["pres"])**2)]
+
+        # Most unstable parcel path
+        try:
+            self.mu_parcel = mc.most_unstable_parcel(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
+            self.mu_parcel_path = mc.parcel_profile(self.sounding["pres"][self.mu_parcel[-1]:], self.sounding["temp"][self.mu_parcel[-1]],
+                self.sounding["dewp"][self.mu_parcel[-1]])
+        except:
+            self.mu_parcel = (np.nan, np.nan, np.nan, np.nan)
+            self.mu_parcel_path = self.sounding['temp']*np.nan
 
         #Enclose in try, except because not every sounding will have a converging parcel path or CAPE.
         try:
@@ -652,9 +665,11 @@ class PySonde:
     #  "pres" - float, height (hPa) of the jet.
     #  "wspd" - speed (m/s) of the jet.
     #  "wdir" - direction (met. deg.) of the jet.
+    #  "depth" - depth of the jet from max core to upper minimum
     #  "category" - integer, type of LLJ following the methodology of Yang et al. 2020.
     #    [-1, 3], with -1 being no LLJ and 3 being the strongest LLJ.
     #  "falloff" - float, difference between the LLJ speed maximum and the above minimum.
+    #  "inds" - Integer tuple with indices of jet layer (speed maximum, speed minimum). This is (bottom, top)
     # If no LLJ is present, the dictionary contains NaNs and the category is -1.
     def find_llj(self):
 
@@ -676,10 +691,17 @@ class PySonde:
         #Locate the maximum wind speed
         maxind = numpy.argmax(wspd)
         wmax = wspd[maxind]
+        wdir = wdir[maxind]
+        
 
         #Locate the minimum above the jet core
         minind = numpy.argmin(wspd[maxind:])
         wmin = wspd[maxind:][minind]
+        depth = self.sounding["alt"][mask][maxind:][minind]-self.sounding["alt"][mask][maxind]
+
+        # Grab indices of jet layer
+        bottom_ind = (numpy.arange(self.sounding['pres'].size)[mask])[maxind]
+        top_ind = ((numpy.arange(self.sounding['pres'].size)[mask])[maxind:])[minind]
 
         #Assign the catgeory
         ms = self.units.meter/self.units.second #Speed units
@@ -700,8 +722,10 @@ class PySonde:
             jet["alt"] = numpy.nan*self.sounding_units["alt"]
             jet["pres"] = numpy.nan*self.sounding_units["pres"]
             jet["wspd"] = numpy.nan*self.sounding_units["uwind"]
-            jet["wdeg"] = numpy.nan*self.units.degrees
+            jet["wdir"] = numpy.nan*self.units.degrees
             jet["falloff"] = numpy.nan*self.sounding_units["uwind"]
+            jet["depth"] = numpy.nan*self.sounding_units["alt"]
+            jet["inds"] = (-1,-1)
 
             #Returning if no jet
             return jet
@@ -712,6 +736,8 @@ class PySonde:
         jet["wspd"] = wmax
         jet["wdir"] = wdir
         jet["falloff"] = wmax-wmin
+        jet["depth"] = depth
+        jet["inds"] = (bottom_ind, top_ind)
 
         #Return jet characteristics
         return jet
@@ -728,8 +754,7 @@ class PySonde:
         brm, blm, bwm = mc.bunkers_storm_motion(self.sounding['pres'], self.sounding['uwind'], self.sounding['vwind'], self.sounding['alt'])
 
         # Get effective inflow layer
-        elayer, dummy = swx.get_effective_layer_indices(self)
-        esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]])
+        
 
         # Get the shears
         ushear1, vshear1 = self.calculate_shear(10.0*mu.meter, 1000.0*mu.meter)
@@ -739,13 +764,33 @@ class PySonde:
         ushear6, vshear6 = self.calculate_shear(10.0*mu.meter, 6000.0*mu.meter)
         shear6 = numpy.sqrt(ushear6**2+vshear6**2).to(mu.knot)
 
-        # Compute severe weather indicies
+        # Compute severe weather indices
+        try:
+            scp = swx.get_scp(self).magnitude
+        except:
+            scp = 0
+        try:
+            stp = swx.get_stp(self).magnitude
+        except:
+            stp = numpy.nan
+        try:
+            wbi = swx.get_wbi(self).magnitude
+        except:
+            wbi = numpy.nan
+        try:
+            elayer, dummy = swx.get_effective_layer_indices(self)
+            esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]]).magnitude
+        except:
+            elayer = (-1, -1)
+            esrh = numpy.nan
+
+        # Build dictionary
         severe = {
             'BUNKERSRIGHT':brm,
             'BUNKERSLEFT': blm,
-            'SCP': swx.get_scp(self).magnitude,
-            'STP': swx.get_stp(self).magnitude,
-            'WBI': swx.get_wbi(self).magnitude,
+            'SCP': scp,
+            'STP': stp,
+            'WBI': wbi,
             'BRN': (self.mu_cape/(0.5*(shear6**2))).magnitude,
             'ESRH': esrh,
             'ELAYER': elayer,
@@ -768,6 +813,9 @@ class PySonde:
 
         # Get the severe weather indices
         severe = self.get_severe_indices()
+
+        # Get low-level jet properties
+        jet = self.find_llj()
 
         # Setup the figure
         fig = pp.figure(layout='constrained', figsize=(13,10))
@@ -798,10 +846,9 @@ class PySonde:
         skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs])
 
         # Add the LCL, CCL, and LFC
-        print(self.lcl_temp, self.lcl_pres)
-        skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='goldenrod', marker='s', label='LCL', s=42)
-        skewt.ax.scatter(self.ccl_temp, self.ccl_pres, color='goldenrod', marker='p', label='CCL', s=42)
-        skewt.ax.scatter(self.lfc_temp, self.lfc_pres, color='goldenrod', marker='X', label='LFC', s=42)
+        skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='olive', marker='s', label='LCL', s=42)
+        skewt.ax.scatter(self.ccl_temp, self.ccl_pres, color='olive', marker='p', label='CCL', s=42)
+        skewt.ax.scatter(self.lfc_temp, self.lfc_pres, color='olive', marker='X', label='LFC', s=42)
 
         # Add shading for the effective inflow layer
         if (severe['ELAYER'][1]>severe['ELAYER'][0]):
@@ -812,6 +859,16 @@ class PySonde:
         hmask = (self.sounding['temp']<=-10*mu.celsius) & (self.sounding['temp']>=-30*mu.celsius)
         skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][hmask][0], y2=self.sounding["pres"][hmask][-1],
                                 color='dodgerblue', alpha=0.3, label='Hail Zone')
+        
+        # Check for a low-level jet
+        if (jet["category"] > -1):
+            print(jet["wspd"].magnitude)
+            print(jet["wdir"].magnitude)
+            skewt.ax.fill_between((-100*mu.celsius, skewt.ax.get_xlim()[-1]), self.sounding["pres"][jet["inds"][0]], y2=self.sounding["pres"][jet["inds"][1]],
+                                color='forestgreen', alpha=0.2, label='Low-Level Jet')
+            jet_text = f'LLJ Wind: {jet["wspd"].magnitude:.0f} m/s\nLLJ Dir: {jet["wdir"].magnitude:.0f}$\degree$'
+        else:
+            jet_text = f'LLJ Wind: {numpy.nan:.0f} m/s\nLLJ Dir: {numpy.nan:.0f}$\degree$'
 
         # Add a legend
         fig.legend(loc='upper left', bbox_to_anchor=(0.635, 0.45), fontsize=10, fancybox=True, shadow=True, ncols=3)
@@ -877,13 +934,8 @@ class PySonde:
         tax.axis('off')
         
         info_string1 = f"SFC CAPE: {self.sfc_cape.magnitude:.0f} J/kg\nML CAPE: {self.ml_cape.magnitude:.0f} J/kg\nMU CAPE: {self.mu_cape.magnitude:.0f} J/kg\nSFC CIN: {self.sfc_cin.magnitude:.0f} J/kg\nML CIN: {self.ml_cin.magnitude:.0f} J/kg\nMU CIN: {self.mu_cin.magnitude:.0f} J/kg"
-        #tax.text(0.01, 0.96, info_string1, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
-
         info_string2 = f"\n\n0-1km Shear: {severe['SHEAR1']:.0f} kts\n0-3km Shear: {severe['SHEAR3']:.0f} kts\n0-6km Shear: {severe['SHEAR6']:.0f} kts"
-        #tax.text(0.01, 0.54, info_string2, transform=tax.transAxes, ha='left', va='top', fontsize=12)#, bbox=dict(edgecolor='black', boxstyle='round,pad=1', facecolor='white', alpha=1.0))
-
         info_string3 = f"\nLCL: {self.lcl_pres.magnitude:.0f} hPa\nCCL: {self.ccl_pres.magnitude:.0f} hPa\nConv. Temp. {self.conv_temp.magnitude:.0f} $\degree$C\nLFC: {self.lfc_pres.magnitude:.0f} hPa"
-        #tax.text(0.01, 0.33, info_string3, transform=tax.transAxes, ha='left', va='top', fontsize=12)
 
         info_string = info_string1+info_string2+info_string3
         tax.text(0.04, 0.965, info_string, transform=tax.transAxes, ha='left', va='top', fontsize=12,
@@ -892,6 +944,9 @@ class PySonde:
         })
 
         info_string4 = f"Supercell Param: {severe['SCP']:.0f}\nSigTor: {severe['STP']:.0f}\nWBI: {severe['WBI']:.0f}\nBulk Richardson: {severe['BRN']:.0f}"
+        tax.text(0.32, 0.965, info_string4, transform=tax.transAxes, ha='left', va='top', fontsize=12,
+                 bbox={
+                     "boxstyle":"round", "ec":"black", "fc":"white"})
 
         # Returning
         return fig, skewt
