@@ -129,6 +129,14 @@ class PySonde:
         else: #Unrecognized format
             raise ValueError("Unrecognized sounding format: ()".format(self.sformat))
 
+        # identify bad levels in sounding and remove
+        inds = numpy.isfinite(self.sounding["dewp"])
+        for k in self.sounding.keys():
+            try:
+                self.sounding[k] = self.sounding[k][inds]
+            except:
+                continue
+
         # Add potential temperature to the sounding
         unitless = self.strip_units()
         self.sounding["pot_temp"] = (at.pot_temp(unitless["pres"]*100.0,
@@ -154,11 +162,6 @@ class PySonde:
     #Method to calculate basic thermodynamic properties of the sounding.
     def calculate_basic_thermo(self):
 
-        #Find first non-Nan level
-        for ind, t in enumerate(self.sounding["dewp"]):
-            if numpy.isfinite(t):
-                break
-
         #Precipitable Water
         try: # backwards compatibility for older versions of metpy
             self.pw = mc.precipitable_water(self.sounding["pres"], self.sounding["dewp"])
@@ -166,24 +169,25 @@ class PySonde:
             self.pw = mc.precipitable_water(self.sounding["dewp"], self.sounding["pres"])
             
         #Lifting condensation level
-        self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][ind], self.sounding["temp"][ind],
-            self.sounding["dewp"][ind])
+        self.lcl_pres, self.lcl_temp = mc.lcl(self.sounding["pres"][0], self.sounding["temp"][0], self.sounding["dewp"][0])
         self.lcl_alt = self.sounding["alt"][numpy.nanargmin((self.lcl_pres-self.sounding["pres"])**2)]
 
         #Level of free convection
         try:
-            inds = numpy.isfinite(self.sounding["dewp"])
-            self.parcel_path = mc.parcel_profile(self.sounding["pres"][inds], self.sounding["temp"][inds][0],
-                self.sounding["dewp"][inds][0])
-            pos = (self.parcel_path > self.sounding["temp"][inds])
-            lfc = (self.sounding["pres"][inds][pos])[0]
+            self.parcel_path = mc.parcel_profile(self.sounding["pres"], self.sounding["temp"][0],
+                self.sounding["dewp"][0])
+            self.mu_parcel = mc.most_unstable_parcel(self.sounding["pres"], self.sounding["temp"], self.sounding["dewp"])
+            self.mu_parcel_path = mc.parcel_profile(self.sounding["pres"][self.mu_parcel[-1]:], self.sounding["temp"][self.mu_parcel[-1]],
+                self.sounding["dewp"][self.mu_parcel[-1]])
+            pos = (self.parcel_path > self.sounding["temp"])
+            lfc = (self.sounding["pres"][pos])[0]
             i = 0
             while (lfc > self.lcl_pres):
                 i += 1
-                lfc = (self.sounding["pres"][inds][pos])[i]
+                lfc = (self.sounding["pres"][pos])[i]
             self.lfc_pres = lfc
-            self.lfc_temp = (self.sounding["temp"][inds][pos])[i]
-            self.lfc_alt = (self.sounding["alt"][inds][pos])[i]
+            self.lfc_temp = (self.sounding["temp"][pos])[i]
+            self.lfc_alt = (self.sounding["alt"][pos])[i]
         except Exception as err:
             print("WARNING: No LFC because:\n{}".format(err))
             print("Likely due to atmospheric stability.")
@@ -195,16 +199,16 @@ class PySonde:
         try:
 
             # Surface-based CAPE and CIN
-            self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"][inds], self.sounding["temp"][inds],
-                self.sounding["dewp"][inds], self.parcel_path)
+            self.sfc_cape, self.sfc_cin = mc.cape_cin(self.sounding["pres"], self.sounding["temp"],
+                self.sounding["dewp"], self.parcel_path)
             
             # Mixed-layer CAPE and CIN
-            self.ml_cape, self.ml_cin = mc.mixed_layer_cape_cin(self.sounding['pres'][inds], self.sounding['temp'][inds],
-                self.sounding['dewp'][inds])
+            self.ml_cape, self.ml_cin = mc.mixed_layer_cape_cin(self.sounding['pres'], self.sounding['temp'],
+                self.sounding['dewp'])
 
             # Most unstable CAPE and CIN
-            self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'][inds], self.sounding['temp'][inds],
-                self.sounding['dewp'][inds])
+            self.mu_cape, self.mu_cin = mc.most_unstable_cape_cin(self.sounding['pres'], self.sounding['temp'],
+                self.sounding['dewp'])
 
         #Do this when parcel path fails to converge
         except Exception as e:
@@ -779,6 +783,11 @@ class PySonde:
         skewt.plot(self.sounding["pres"], tw, color="dodgerblue", label='Tw') # Wet-bulb temperature
         try:
             skewt.plot(self.sounding["pres"], self.parcel_path, color="black", label='Parcel')
+        except:
+            pass
+
+        try:
+            skewt.plot(self.sounding["pres"][self.mu_parcel[-1]:], self.mu_parcel_path, color="black", linestyle='--', label='MU Parcel')
         except:
             pass
 
