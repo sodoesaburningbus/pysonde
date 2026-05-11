@@ -139,7 +139,11 @@ Currently, the PySonde object has the following attributes and methods:
 
 Add installation via pip
 
-Options to calculate mixed layer and most unstable CAPE
+Add temperature advection to sounding based on thermal wind.
+
+Expand severe weather parameter functionality.
+
+Add a precip type predictor.
 
 ---------------------------------------------EXAMPLES---------------------------------------------
 
