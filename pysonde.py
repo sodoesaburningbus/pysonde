@@ -779,7 +779,7 @@ class PySonde:
             wbi = numpy.nan
         try:
             elayer, dummy = swx.get_effective_layer_indices(self)
-            esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]]).magnitude
+            psrh, nsrh, esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]])
         except:
             elayer = (-1, -1)
             esrh = numpy.nan
@@ -792,7 +792,7 @@ class PySonde:
             'STP': stp,
             'WBI': wbi,
             'BRN': (self.mu_cape/(0.5*(shear6**2))).magnitude,
-            'ESRH': esrh,
+            'ESRH': esrh.magnitude,
             'ELAYER': elayer,
             'SHEAR1':shear1.magnitude,
             'SHEAR3':shear3.magnitude,
@@ -843,7 +843,7 @@ class PySonde:
         except:
             pass
 
-        skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs])
+        skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs], plot_units=mu.knot)
 
         # Add the LCL, CCL, and LFC
         skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='olive', marker='s', label='LCL', s=42)
@@ -896,18 +896,18 @@ class PySonde:
         hax.set_ylabel('')
 
         # Add data
-        cont = h.plot_colormapped(self.sounding['uwind'][pmask], self.sounding['vwind'][pmask], c=self.sounding['alt'][pmask], cmap='plasma')
+        cont = h.plot_colormapped(self.sounding['uwind'][pmask].to(mu.knot), self.sounding['vwind'][pmask].to(mu.knot), c=self.sounding['alt'][pmask], cmap='plasma')
         hcb = fig.colorbar(cont, ax=hax, pad=0.01, orientation='horizontal', shrink=0.65)
         hcb.set_label('Height', fontsize=12, fontweight='bold')
-        hax.arrow(0, 0, severe['BUNKERSRIGHT'][0].m - 0.3, severe['BUNKERSRIGHT'][1].m - 0.3,
+        hax.arrow(0, 0, severe['BUNKERSRIGHT'][0].to(mu.knot).m - 0.3, severe['BUNKERSRIGHT'][1].to(mu.knot).m - 0.3,
                   linewidth=2, color='black', label='Bunkers RM Vector',
                   length_includes_head=True, head_width=2)
-        hax.arrow(0, 0, severe['BUNKERSLEFT'][0].m - 0.3, severe['BUNKERSLEFT'][1].m - 0.3,
+        hax.arrow(0, 0, severe['BUNKERSLEFT'][0].to(mu.knot).m - 0.3, severe['BUNKERSLEFT'][1].to(mu.knot).m - 0.3,
                   linewidth=2, color='black', label='Bunkers LM Vector',
                   length_includes_head=True, head_width=2)
-        hax.text((severe['BUNKERSRIGHT'][0].m + 0.5), (severe['BUNKERSRIGHT'][1].m - 0.5), 'BRM', weight='bold', ha='left',
+        hax.text((severe['BUNKERSRIGHT'][0].to(mu.knot).m + 0.5), (severe['BUNKERSRIGHT'][1].to(mu.knot).m - 0.5), 'BRM', weight='bold', ha='left',
                     fontsize=13)
-        hax.text((severe['BUNKERSLEFT'][0].m + 0.5), (severe['BUNKERSLEFT'][1].m - 0.5), 'LLM', weight='bold', ha='left',
+        hax.text((severe['BUNKERSLEFT'][0].to(mu.knot).m + 0.5), (severe['BUNKERSLEFT'][1].to(mu.knot).m - 0.5), 'LLM', weight='bold', ha='left',
                     fontsize=13)
 
         # Add the CAPE and CIN plot
