@@ -780,6 +780,7 @@ class PySonde:
         try:
             elayer, dummy = swx.get_effective_layer_indices(self)
             psrh, nsrh, esrh = swx.get_esrh(self, self.sounding['alt'][elayer[0]], self.sounding['alt'][elayer[1]]-self.sounding['alt'][elayer[0]])
+            esrh = esrh.magnitude
         except:
             elayer = (-1, -1)
             esrh = numpy.nan
@@ -792,7 +793,7 @@ class PySonde:
             'STP': stp,
             'WBI': wbi,
             'BRN': (self.mu_cape/(0.5*(shear6**2))).magnitude,
-            'ESRH': esrh.magnitude,
+            'ESRH': esrh,
             'ELAYER': elayer,
             'SHEAR1':shear1.magnitude,
             'SHEAR3':shear3.magnitude,
@@ -846,9 +847,9 @@ class PySonde:
         skewt.plot_barbs(self.sounding["pres"][pmask][::nbarbs], self.sounding["uwind"][pmask][::nbarbs], self.sounding["vwind"][pmask][::nbarbs], plot_units=mu.knot)
 
         # Add the LCL, CCL, and LFC
-        skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='olive', marker='s', label='LCL', s=42)
-        skewt.ax.scatter(self.ccl_temp, self.ccl_pres, color='olive', marker='p', label='CCL', s=42)
-        skewt.ax.scatter(self.lfc_temp, self.lfc_pres, color='olive', marker='X', label='LFC', s=42)
+        skewt.ax.scatter(self.lcl_temp, self.lcl_pres, color='olive', marker='s', label='LCL', s=42, zorder=11)
+        skewt.ax.scatter(self.ccl_temp, self.ccl_pres, color='olive', marker='p', label='CCL', s=42, zorder=11)
+        skewt.ax.scatter(self.lfc_temp, self.lfc_pres, color='olive', marker='X', label='LFC', s=42, zorder=11)
 
         # Add shading for the effective inflow layer
         if (severe['ELAYER'][1]>severe['ELAYER'][0]):
